@@ -1,0 +1,1 @@
+All of this came from a crazy idea. Now I present this the produce of this idea to the world. If used to make something that goes on the play store, just credit me and I will be happy. This was never about money only to prove the idea. Have fun.
