@@ -1,0 +1,6 @@
+{
+  "name": "Apex League",
+  "description": "Sports league commissioner tycoon game: manage finances, franchise expansion, labor unions, broadcasts, and rules.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
