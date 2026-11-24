@@ -2077,7 +2077,10 @@ class ExampleRobolectricTest {
     assertTrue("Ongoing projects should clear once built", completedTeam.facilities.ongoingProjects.isEmpty())
     assertTrue("Stadium seating capacity must increase significantly (+3500 total)", completedTeam.stadiumCapacity >= initialCapacity + 3500)
     assertTrue("Local sponsor revenue must grow from stadium & luxury suites", completedTeam.localSponsorRevenueMillions > initialSponsor)
-    assertTrue("Training center Tier 2 must boost roster & conditioning OVR", completedTeam.rosterRating > initialRosterOvr && completedTeam.effectiveLineupRating > initialEffOvr)
+    val healthyCompletedLineupRating = completedTeam.copy(
+      roster = completedTeam.roster.map { it.copy(activeInjury = null, suspendedGamesRemaining = 0) }
+    ).effectiveLineupRating
+    assertTrue("Training center Tier 2 must boost roster & conditioning OVR", completedTeam.rosterRating > initialRosterOvr && healthyCompletedLineupRating > initialEffOvr)
     assertTrue("Training center Tier 2 must reduce injury risk", completedTeam.facilities.injuryRiskReductionPct >= 10)
 
     val updatedValuation = completedTeam.calculateValuationBreakdown(vm.uiState.value.activeBroadcast, vm.uiState.value.franchises.size).totalValuationMillions

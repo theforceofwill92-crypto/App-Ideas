@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.*
 import com.example.ui.components.ProgressBarWithLabel
+import com.example.ui.components.StadiumUltimatumCard
 import com.example.ui.theme.*
 import com.example.viewmodel.LeagueUiState
 import com.example.viewmodel.LeagueViewModel
@@ -179,6 +180,17 @@ fun OffSeasonSummitScreen(
                 }
             }
 
+            // Active Stadium Ultimatum Event Card (if triggered this off-season)
+            uiState.stadiumDealState.activeUltimatum?.let { ultimatum ->
+                item {
+                    StadiumUltimatumCard(
+                        ultimatum = ultimatum,
+                        leagueCashMillions = uiState.cashReservesMillions,
+                        onSelectChoice = { choice -> viewModel.resolveStadiumUltimatumChoice(choice) }
+                    )
+                }
+            }
+
             // Parity Impact Banner
             item {
                 Card(
@@ -278,6 +290,8 @@ fun OffSeasonSummitScreen(
                     item {
                         FreeAgencyPanel(
                             signings = session.freeAgencySignings,
+                            rivalLeague = uiState.rivalLeague,
+                            onOpenRivalWatch = { viewModel.openRivalWatchModal(true) },
                             onProceedNext = { viewModel.setOffSeasonStep(OffSeasonStep.HALL_OF_FAME) }
                         )
                     }
@@ -1853,6 +1867,8 @@ private fun LeagueDraftPanel(
 @Composable
 private fun FreeAgencyPanel(
     signings: List<FreeAgencySigning>,
+    rivalLeague: RivalLeague,
+    onOpenRivalWatch: () -> Unit,
     onProceedNext: () -> Unit
 ) {
     Card(
@@ -1921,6 +1937,60 @@ private fun FreeAgencyPanel(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            val rivalAccent = Color(rivalLeague.threatColorHex)
+            Surface(
+                color = rivalAccent.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(10.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, rivalAccent.copy(alpha = 0.35f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("offseason_rival_watch_banner")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = when {
+                                rivalLeague.activeAbsorptionNegotiation != null ->
+                                    "MERGER SUMMIT: ${rivalLeague.name} (${rivalLeague.seasonsSurvived}Y Survived • ${rivalLeague.hype} Hype)"
+                                rivalLeague.isActive ->
+                                    "Rival Threat: ${rivalLeague.name} (\$${rivalLeague.capital}M Cap • ${rivalLeague.hype} Hype • ${rivalLeague.seasonsSurvived}Y Survived)"
+                                rivalLeague.permanentTvRevenueBoostMillions > 0L ->
+                                    "${rivalLeague.name} Absorbed — +\$${rivalLeague.permanentTvRevenueBoostMillions}M/yr Permanent TV Escalator"
+                                else ->
+                                    "${rivalLeague.name} Folded — Poached FAs Returned"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black,
+                            color = rivalAccent
+                        )
+                        Text(
+                            text = rivalLeague.lastOffseasonPoachSummary,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(
+                        onClick = onOpenRivalWatch,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("btn_offseason_open_rival_watch")
+                    ) {
+                        Text("Rival Watch", fontWeight = FontWeight.Black, color = rivalAccent)
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(14.dp))
 

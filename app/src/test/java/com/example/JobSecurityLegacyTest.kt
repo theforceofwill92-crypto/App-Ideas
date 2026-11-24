@@ -267,8 +267,12 @@ class JobSecurityLegacyTest {
         composeTestRule.onNodeWithTag("job_security_legacy_screen").assertIsDisplayed()
         composeTestRule.onNodeWithTag("job_security_meter_card").assertIsDisplayed()
         composeTestRule.onNodeWithTag("legacy_meter_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("job_security_lazy_column")
+            .performScrollToNode(hasTestTag("card_pillar_OWNERS"))
         composeTestRule.onNodeWithTag("card_pillar_OWNERS").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("card_pillar_PLAYERS").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("job_security_lazy_column")
+            .performScrollToNode(hasTestTag("card_pillar_PLAYERS"))
+        composeTestRule.onNodeWithTag("card_pillar_PLAYERS").assertIsDisplayed()
 
         // Switch to Review tab, convene review, ratify with Fans pledge, verify Ledger
         composeTestRule.onNodeWithTag("tab_security_review").performClick()
@@ -284,7 +288,11 @@ class JobSecurityLegacyTest {
             vm.openOffSeasonSummit(true)
             vm.setOffSeasonStep(OffSeasonStep.ANNUAL_REVIEW)
         }
-        composeTestRule.onNodeWithTag("tab_offseason_step_9").assertExists()
+        composeTestRule.onNodeWithTag("offseason_steps_lazy_row")
+            .performScrollToNode(hasTestTag("tab_offseason_step_9"))
+        composeTestRule.onNodeWithTag("tab_offseason_step_9").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("offseason_summit_content")
+            .performScrollToNode(hasTestTag("annual_review_card"))
         composeTestRule.onNodeWithTag("annual_review_card").assertIsDisplayed()
     }
 }

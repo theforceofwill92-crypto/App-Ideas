@@ -132,5 +132,25 @@ class DashboardTrendsChartTest {
         composeTestRule.onNodeWithTag("trend_scrub_details")
             .performScrollTo()
             .assertTextContains("W1 •", substring = true)
+
+        // Verify Recharts Executive Trends (Revenue, TV Ratings, Player Satisfaction) renders & toggles cleanly
+        val latestPoint = vm.leagueTrends.value.last()
+        assertTrue(latestPoint.leagueRevenueMillions > 0L)
+        assertTrue(latestPoint.tvBroadcastRating > 0.0)
+        assertTrue(latestPoint.playerSatisfactionPct in 0..100)
+
+        composeTestRule.onNodeWithTag("recharts_executive_trends_chart")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeTestRule.onNodeWithTag("executive_trends_canvas")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeTestRule.onNodeWithTag("executive_trends_scrub_details")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeTestRule.onNodeWithTag("trend_toggle_revenue").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("trend_toggle_tv_ratings").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("trend_toggle_player_satisfaction").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
     }
 }

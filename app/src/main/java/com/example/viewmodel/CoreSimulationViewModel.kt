@@ -74,6 +74,32 @@ class CoreSimulationViewModel : ViewModel() {
         return Triple(composite, avgMorale, avgLoyalty)
     }
 
+    fun computeExecutiveTrendMetrics(state: LeagueUiState): Triple<Long, Double, Int> {
+        val exclusivityFactor = if (state.activeBroadcast.hasExclusivity) {
+            1.0
+        } else {
+            ((100 - state.activeBroadcast.exclusivityLostPenaltyPct.coerceIn(0, 50)) / 100.0)
+        }
+        val weeklyRevenueM = if (state.unionAgreement.isLockoutActive) {
+            0L
+        } else {
+            state.lastRevenueBreakdown?.grossLeagueRevenueMillions?.coerceAtLeast(1L)
+                ?: (((state.activeBroadcast.annualPayoutMillions / 16.0) * exclusivityFactor * 0.15) +
+                    (state.franchises.sumOf { it.localSponsorRevenueMillions } / 16.0 * 0.15))
+                    .roundToLong()
+                    .coerceAtLeast(4L)
+        }
+        val (sentiment, _, _) = computeFanSentimentMetrics(state.franchises)
+        val rawRating = (state.activeBroadcast.reachMultiplier * 2.35) +
+            (state.totalLeagueFanbaseMillions * 0.08) +
+            ((sentiment - 68) * 0.025) -
+            (if (!state.activeBroadcast.hasExclusivity) 0.9 else 0.0) -
+            (if (state.unionAgreement.isLockoutActive) 2.4 else 0.0)
+        val tvRating = (Math.round(rawRating.coerceIn(0.8, 12.5) * 10.0) / 10.0)
+        val playerSatisfactionPct = state.unionAgreement.unionSatisfaction.coerceIn(5, 100)
+        return Triple(weeklyRevenueM, tvRating, playerSatisfactionPct)
+    }
+
     fun seedDashboardTrendsIfNeeded(state: LeagueUiState): List<DashboardTrendPoint> {
         if (state.dashboardTrends.isNotEmpty()) {
             val baseVal = state.dashboardTrends.first().leagueValuationMillions.coerceAtLeast(100L)
@@ -88,6 +114,7 @@ class CoreSimulationViewModel : ViewModel() {
         }
 
         val (currentSentiment, currentMorale, currentLoyalty) = computeFanSentimentMetrics(state.franchises)
+        val (currentRevM, currentTvRating, currentPlayerSat) = computeExecutiveTrendMetrics(state)
         val snapshots = state.financialSnapshots
         val seeded: List<DashboardTrendPoint>
         val baselineVal: Long
@@ -108,6 +135,9 @@ class CoreSimulationViewModel : ViewModel() {
                 }
                 val pointMorale = if (isLast) currentMorale else (currentMorale - (stepBack * 2)).coerceIn(30, 99)
                 val pointLoyalty = if (isLast) currentLoyalty else (currentLoyalty - stepBack).coerceIn(30, 99)
+                val pointRev = if (isLast) currentRevM else snap.totalRevenue.roundToLong().coerceAtLeast(2L)
+                val pointTv = if (isLast) currentTvRating else (Math.round((currentTvRating - stepBack * 0.12).coerceIn(1.2, 12.5) * 10.0) / 10.0)
+                val pointPlayerSat = if (isLast) currentPlayerSat else (currentPlayerSat - stepBack).coerceIn(20, 99)
                 DashboardTrendPoint(
                     id = "seed_${state.currentYear}_${idx}_${snap.weekNumber}",
                     periodLabel = snap.periodLabel,
@@ -119,7 +149,10 @@ class CoreSimulationViewModel : ViewModel() {
                     fanSentimentPct = pointSentiment,
                     avgMoralePct = pointMorale,
                     avgLoyaltyPct = pointLoyalty,
-                    totalFanbaseMillions = state.totalLeagueFanbaseMillions
+                    totalFanbaseMillions = state.totalLeagueFanbaseMillions,
+                    leagueRevenueMillions = pointRev,
+                    tvBroadcastRating = pointTv,
+                    playerSatisfactionPct = pointPlayerSat
                 )
             }.takeLast(24)
         } else {
@@ -136,7 +169,10 @@ class CoreSimulationViewModel : ViewModel() {
                     fanSentimentPct = currentSentiment,
                     avgMoralePct = currentMorale,
                     avgLoyaltyPct = currentLoyalty,
-                    totalFanbaseMillions = state.totalLeagueFanbaseMillions
+                    totalFanbaseMillions = state.totalLeagueFanbaseMillions,
+                    leagueRevenueMillions = currentRevM,
+                    tvBroadcastRating = currentTvRating,
+                    playerSatisfactionPct = currentPlayerSat
                 )
             )
         }
@@ -163,6 +199,7 @@ class CoreSimulationViewModel : ViewModel() {
             ?: currentSeries.firstOrNull()?.leagueValuationMillions
             ?: state.leagueValuationMillions).coerceAtLeast(100L)
         val (sentiment, morale, loyalty) = computeFanSentimentMetrics(state.franchises)
+        val (revMillions, tvRating, playerSat) = computeExecutiveTrendMetrics(state)
         val growthPct = ((state.leagueValuationMillions - baselineVal).toFloat() / baselineVal.toFloat()) * 100f
         val newPoint = DashboardTrendPoint(
             id = "trend_${state.currentYear}_w${state.currentWeek}_${eventTag}_${currentSeries.size}",
@@ -175,7 +212,10 @@ class CoreSimulationViewModel : ViewModel() {
             fanSentimentPct = sentiment,
             avgMoralePct = morale,
             avgLoyaltyPct = loyalty,
-            totalFanbaseMillions = state.totalLeagueFanbaseMillions
+            totalFanbaseMillions = state.totalLeagueFanbaseMillions,
+            leagueRevenueMillions = revMillions,
+            tvBroadcastRating = tvRating,
+            playerSatisfactionPct = playerSat
         )
         val updated = (currentSeries + newPoint).takeLast(24)
         _simulationState.update {
@@ -358,8 +398,24 @@ class CoreSimulationViewModel : ViewModel() {
 
         var candidateEvent: LaborUnionTriggerEvent? = null
 
+        // 0. Active Owner Lockout suspending operations
+        if (union.isLockoutActive && !alreadyTriggeredRecently(LaborTriggerType.LOCKOUT_ACTIVE, minWeekGap = 2)) {
+            candidateEvent = LaborUnionTriggerEvent(
+                id = "labor_${year}_w${week}_lockout",
+                type = LaborTriggerType.LOCKOUT_ACTIVE,
+                severity = LaborTriggerSeverity.CRITICAL,
+                title = "LEAGUE LOCKOUT ACTIVE — GAMES SUSPENDED",
+                description = "CBA negotiations collapsed and owners locked out the Players Association (${union.lockoutWeeksLost} week(s) lost). Weekly broadcasts and ticket gates are frozen until a new accord passes.",
+                recommendedAction = "Ratify a compromise CBA raising the salary cap or roster rules to lift the lockout immediately.",
+                seasonYear = year,
+                week = week,
+                strikeRiskSnapshot = union.strikeRisk,
+                cbaYearsRemainingSnapshot = union.cbaYearsRemaining,
+                autoPromptNegotiation = true
+            )
+        }
         // 1. Imminent work stoppage (Strike Risk >= 75%)
-        if (union.strikeRisk >= 75 && !alreadyTriggeredRecently(LaborTriggerType.WORK_STOPPAGE_ALERT, minWeekGap = 3)) {
+        else if (union.strikeRisk >= 75 && !alreadyTriggeredRecently(LaborTriggerType.WORK_STOPPAGE_ALERT, minWeekGap = 3)) {
             candidateEvent = LaborUnionTriggerEvent(
                 id = "labor_${year}_w${week}_stoppage",
                 type = LaborTriggerType.WORK_STOPPAGE_ALERT,
@@ -379,15 +435,21 @@ class CoreSimulationViewModel : ViewModel() {
             if (justRolledSeason) {
                 val escalatedRisk = (union.strikeRisk + 12).coerceAtMost(95)
                 val reducedSat = (union.unionSatisfaction - 8).coerceAtLeast(20)
-                union = union.copy(strikeRisk = escalatedRisk, unionSatisfaction = reducedSat)
+                val triggersLockout = escalatedRisk >= 60
+                union = union.copy(
+                    strikeRisk = escalatedRisk,
+                    unionSatisfaction = reducedSat,
+                    isLockoutActive = union.isLockoutActive || triggersLockout,
+                    lastLockoutSeasonYear = if (triggersLockout) year else union.lastLockoutSeasonYear
+                )
             }
             candidateEvent = LaborUnionTriggerEvent(
                 id = "labor_${year}_w${week}_cba_expired",
                 type = LaborTriggerType.CBA_EXPIRED,
                 severity = LaborTriggerSeverity.CRITICAL,
-                title = "CBA EXPIRED — MANDATORY UNION NEGOTIATIONS",
-                description = "The Collective Bargaining Agreement has expired (0 years remaining). Players are operating without a multi-year accord as strike pressure climbs to ${union.strikeRisk}%.",
-                recommendedAction = "Submit and ratify a new 5-year CBA with the Players Union and Board of Governors.",
+                title = if (union.isLockoutActive) "CBA EXPIRED — LOCKOUT ENFORCED" else "CBA EXPIRED — MANDATORY UNION NEGOTIATIONS",
+                description = "The Collective Bargaining Agreement has expired (0 years remaining). Players refuse to play under old cap & roster terms as strike risk hits ${union.strikeRisk}%.",
+                recommendedAction = "Submit and ratify a new 5-year CBA with Salary Cap & Roster Rules concessions to prevent prolonged lockout.",
                 seasonYear = year,
                 week = week,
                 strikeRiskSnapshot = union.strikeRisk,
@@ -413,23 +475,23 @@ class CoreSimulationViewModel : ViewModel() {
                 autoPromptNegotiation = true
             )
         }
-        // 4. CBA Expiring Soon (1 year remaining on season kickoff or late-season milestone)
+        // 4. CBA Expiring Soon (1 year remaining — generates Labor Dispute demanding Salary Cap or Roster Rules changes)
         else if (union.cbaYearsRemaining == 1 &&
-            (justRolledSeason || week == 1 || week == 10) &&
-            !alreadyTriggeredRecently(LaborTriggerType.CBA_EXPIRING_SOON, minWeekGap = 8)
+            (justRolledSeason || week == 1 || week == 10 || week == 14) &&
+            !alreadyTriggeredRecently(LaborTriggerType.CBA_EXPIRING_SOON, minWeekGap = 6)
         ) {
             candidateEvent = LaborUnionTriggerEvent(
                 id = "labor_${year}_w${week}_cba_expiring",
                 type = LaborTriggerType.CBA_EXPIRING_SOON,
                 severity = LaborTriggerSeverity.WARNING,
-                title = "FINAL YEAR OF CBA — RENEWAL WINDOW OPEN",
-                description = "Only 1 season remains on the current Collective Bargaining Agreement. Early negotiations can lock in 5 years of labor peace before expiry.",
-                recommendedAction = "Preview owner votes and ratify a successor CBA before the off-season rollover.",
+                title = "LABOR DISPUTE: CBA EXPIRING — CAP & ROSTER DEMANDS",
+                description = "Only 1 season remains on the CBA expiration timer. Players demand a higher Salary Cap (+\$12M) and Expanded 18-Man Roster slots—failing to reach a deal risks a lockout.",
+                recommendedAction = "Negotiate Salary Cap & Roster Rules concessions or ratify a new 5-year CBA before expiration.",
                 seasonYear = year,
                 week = week,
                 strikeRiskSnapshot = union.strikeRisk,
                 cbaYearsRemainingSnapshot = union.cbaYearsRemaining,
-                autoPromptNegotiation = false
+                autoPromptNegotiation = true
             )
         }
         // 5. Revenue share imbalance during strong league earnings or Hard Cap restriction
@@ -533,6 +595,7 @@ class CoreSimulationViewModel : ViewModel() {
         val avgLoyalty = if (state.franchises.isNotEmpty()) state.franchises.map { it.fanLoyalty }.average() else 75.0
         val fanSentimentPct = ((avgMorale * 0.55) + (avgLoyalty * 0.45)).toInt().coerceIn(0, 100)
         val triggerType = trigger?.type ?: when {
+            state.unionAgreement.isLockoutActive -> LaborTriggerType.LOCKOUT_ACTIVE
             state.unionAgreement.cbaYearsRemaining <= 0 -> LaborTriggerType.CBA_EXPIRED
             state.unionAgreement.strikeRisk >= 55 -> LaborTriggerType.STRIKE_THREAT_CRITICAL
             state.unionAgreement.playerRevenueSharePct < 49 -> LaborTriggerType.REVENUE_SHARE_DISPUTE
@@ -541,12 +604,17 @@ class CoreSimulationViewModel : ViewModel() {
             else -> LaborTriggerType.CBA_EXPIRING_SOON
         }
         val severity = trigger?.severity ?: when {
-            state.unionAgreement.strikeRisk >= 55 || state.unionAgreement.cbaYearsRemaining <= 0 -> LaborTriggerSeverity.CRITICAL
+            state.unionAgreement.isLockoutActive || state.unionAgreement.strikeRisk >= 55 || state.unionAgreement.cbaYearsRemaining <= 0 -> LaborTriggerSeverity.CRITICAL
             state.unionAgreement.strikeRisk >= 35 || state.unionAgreement.cbaYearsRemaining <= 1 -> LaborTriggerSeverity.WARNING
             else -> LaborTriggerSeverity.INFO
         }
 
         val (repName, repTitle, repQuote) = when (triggerType) {
+            LaborTriggerType.LOCKOUT_ACTIVE -> Triple(
+                "Marcus Vance & Devon Brooks",
+                "PA Emergency Bargaining Committee",
+                "Arenas are dark and broadcasts are suspended. Lift the lockout by conceding salary cap room and expanded roster slots."
+            )
             LaborTriggerType.WORK_STOPPAGE_ALERT,
             LaborTriggerType.STRIKE_THREAT_CRITICAL -> Triple(
                 "Marcus Vance",
@@ -557,7 +625,7 @@ class CoreSimulationViewModel : ViewModel() {
             LaborTriggerType.CBA_EXPIRING_SOON -> Triple(
                 "Devon Brooks",
                 "Lead CBA Counsel",
-                "Ownership valuations are surging. Either we lock in a multi-year labor accord right now, or fans face an ugly lockout."
+                "With the CBA clock ticking down, players demand higher salary cap room and expanded 18-man rosters. Refuse and we risk a full lockout."
             )
             LaborTriggerType.REVENUE_SHARE_DISPUTE -> Triple(
                 "Devon Brooks",
@@ -572,18 +640,72 @@ class CoreSimulationViewModel : ViewModel() {
         }
 
         val headline = trigger?.title ?: when (triggerType) {
+            LaborTriggerType.LOCKOUT_ACTIVE -> "LEAGUE LOCKOUT CRISIS — EMERGENCY ACCORD"
             LaborTriggerType.CBA_EXPIRED -> "CBA TABLE DEADLOCK — RENEWAL DECISION"
             LaborTriggerType.WORK_STOPPAGE_ALERT -> "IMMINENT WORK STOPPAGE SHOWDOWN"
             LaborTriggerType.STRIKE_THREAT_CRITICAL -> "STRIKE CRISIS BARGAINING FLASHPOINT"
             LaborTriggerType.REVENUE_SHARE_DISPUTE -> "REVENUE SPLIT COUNTER-PROPOSAL"
             LaborTriggerType.TRAVEL_SAFETY_GRIEVANCE -> "TRAVEL & SAFETY CHARTER ULTIMATUM"
-            LaborTriggerType.CBA_EXPIRING_SOON -> "COLLECTIVE BARGAINING SUMMIT PROPOSAL"
+            LaborTriggerType.CBA_EXPIRING_SOON -> "CBA EXPIRING LABOR DISPUTE — CAP & ROSTER RULES"
         }
 
         val subheadline = trigger?.description
             ?: "Union leadership requested an immediate Commissioner ruling on the ${state.currentYear} labor table (${state.unionAgreement.strikeRisk}% strike risk)."
 
+        val elevatedCapMillions = (state.unionAgreement.salaryCapMillions + 12L).coerceIn(85L, 160L)
         val choices = when (triggerType) {
+            LaborTriggerType.LOCKOUT_ACTIVE -> listOf(
+                LaborNegotiationChoice(
+                    id = "choice_end_lockout_compromise",
+                    title = "Lift Lockout: +\$12M Cap (\$${elevatedCapMillions}M) & 18-Man Roster",
+                    stanceTag = "END LOCKOUT • 5-YR CBA",
+                    summary = "Ratify a 5-year CBA granting +\$12M salary cap room and Expanded 18-man rosters to immediately resume games.",
+                    projectedCashImpactMillions = -5L,
+                    projectedWeeklyNetImpactMillions = 1L,
+                    projectedValuationImpactMillions = 20L,
+                    projectedFanMoraleDelta = 9,
+                    projectedFanLoyaltyDelta = 6,
+                    projectedUnionSatisfactionDelta = 20,
+                    projectedStrikeRiskDelta = -26,
+                    projectedRevenueShareDeltaPct = 1,
+                    projectedCbaYearsSet = 5,
+                    requestedSalaryCapMillions = elevatedCapMillions,
+                    requestedSalaryCapType = SalaryCapType.SOFT_CAP_LUXURY_TAX,
+                    requestedRosterSizeRule = RosterSizeRule.EXPANDED_18,
+                    clearsLockout = true
+                ),
+                LaborNegotiationChoice(
+                    id = "choice_end_lockout_bridge",
+                    title = "Suspend Lockout via 2-Year Binding Arbitration",
+                    stanceTag = "ARBITRATION BRIDGE",
+                    summary = "Reopen arenas under a 2-year CBA extension and transition straight to the custom CBA bargaining table.",
+                    projectedCashImpactMillions = -2L,
+                    projectedWeeklyNetImpactMillions = 0L,
+                    projectedValuationImpactMillions = 8L,
+                    projectedFanMoraleDelta = 5,
+                    projectedFanLoyaltyDelta = 3,
+                    projectedUnionSatisfactionDelta = 11,
+                    projectedStrikeRiskDelta = -15,
+                    projectedCbaYearsSet = 2,
+                    clearsLockout = true,
+                    opensCbaTableAfter = true
+                ),
+                LaborNegotiationChoice(
+                    id = "choice_maintain_lockout",
+                    title = "Hold Lockout Line & Enforce Owner Freeze",
+                    stanceTag = "LOCKOUT HARDLINE",
+                    summary = "Refuse cap and roster concessions—keeps arenas dark and escalates weekly financial and TV rating losses.",
+                    projectedCashImpactMillions = 0L,
+                    projectedWeeklyNetImpactMillions = -5L,
+                    projectedValuationImpactMillions = -16L,
+                    projectedFanMoraleDelta = -10,
+                    projectedFanLoyaltyDelta = -6,
+                    projectedUnionSatisfactionDelta = -10,
+                    projectedStrikeRiskDelta = 12,
+                    activatesLockoutOnReject = true
+                )
+            )
+
             LaborTriggerType.WORK_STOPPAGE_ALERT,
             LaborTriggerType.STRIKE_THREAT_CRITICAL -> listOf(
                 LaborNegotiationChoice(
@@ -597,7 +719,8 @@ class CoreSimulationViewModel : ViewModel() {
                     projectedFanMoraleDelta = 6,
                     projectedFanLoyaltyDelta = 4,
                     projectedUnionSatisfactionDelta = 15,
-                    projectedStrikeRiskDelta = -18
+                    projectedStrikeRiskDelta = -18,
+                    clearsLockout = true
                 ),
                 LaborNegotiationChoice(
                     id = "choice_balanced_safeguards",
@@ -613,20 +736,22 @@ class CoreSimulationViewModel : ViewModel() {
                     projectedStrikeRiskDelta = -12,
                     projectedRevenueShareDeltaPct = 1,
                     enactsCharterFlights = true,
-                    enactsBackToBackLimit = true
+                    enactsBackToBackLimit = true,
+                    clearsLockout = true
                 ),
                 LaborNegotiationChoice(
                     id = "choice_hardline_escrow",
                     title = "Hold Cap Ceiling & Enforce Owner Escrow",
                     stanceTag = "OWNER HARDLINE",
-                    summary = "Protect franchise payroll margins and retain \$4M escrow, risking severe fan backlash and strike escalation.",
+                    summary = "Protect franchise payroll margins and retain \$4M escrow, risking severe fan backlash and lockout escalation.",
                     projectedCashImpactMillions = 4L,
                     projectedWeeklyNetImpactMillions = 1L,
                     projectedValuationImpactMillions = -14L,
                     projectedFanMoraleDelta = -9,
                     projectedFanLoyaltyDelta = -5,
                     projectedUnionSatisfactionDelta = -10,
-                    projectedStrikeRiskDelta = 12
+                    projectedStrikeRiskDelta = 12,
+                    activatesLockoutOnReject = true
                 )
             )
 
@@ -634,9 +759,9 @@ class CoreSimulationViewModel : ViewModel() {
             LaborTriggerType.CBA_EXPIRING_SOON -> listOf(
                 LaborNegotiationChoice(
                     id = "choice_ratify_5yr_accord",
-                    title = "Ratify 5-Year Labor Accord (+1% Player Split)",
+                    title = "Ratify 5-Yr CBA: \$${elevatedCapMillions}M Cap & 18-Man Roster",
                     stanceTag = "5-YEAR ACCORD",
-                    summary = "Pay a \$4M signing bonus and bump player revenue split by 1% to secure 5 full seasons of guaranteed labor peace.",
+                    summary = "Pay \$4M bonus, raise salary cap to \$${elevatedCapMillions}M Soft Cap, and expand active rosters to 18 slots for 5 years of labor peace.",
                     projectedCashImpactMillions = -4L,
                     projectedWeeklyNetImpactMillions = -1L,
                     projectedValuationImpactMillions = 22L,
@@ -645,13 +770,17 @@ class CoreSimulationViewModel : ViewModel() {
                     projectedUnionSatisfactionDelta = 16,
                     projectedStrikeRiskDelta = -20,
                     projectedRevenueShareDeltaPct = 1,
-                    projectedCbaYearsSet = 5
+                    projectedCbaYearsSet = 5,
+                    requestedSalaryCapMillions = elevatedCapMillions,
+                    requestedSalaryCapType = SalaryCapType.SOFT_CAP_LUXURY_TAX,
+                    requestedRosterSizeRule = RosterSizeRule.EXPANDED_18,
+                    clearsLockout = true
                 ),
                 LaborNegotiationChoice(
                     id = "choice_interim_bridge",
                     title = "Sign 1-Year Bridge & Open Custom CBA Table",
                     stanceTag = "INTERIM BRIDGE",
-                    summary = "Authorize a \$1M good-faith bridge extension to prevent disruption while fine-tuning cap sliders.",
+                    summary = "Authorize a \$1M good-faith bridge extension to avert a lockout while fine-tuning cap and roster sliders.",
                     projectedCashImpactMillions = -1L,
                     projectedWeeklyNetImpactMillions = 0L,
                     projectedValuationImpactMillions = 5L,
@@ -660,20 +789,24 @@ class CoreSimulationViewModel : ViewModel() {
                     projectedUnionSatisfactionDelta = 6,
                     projectedStrikeRiskDelta = -8,
                     projectedCbaYearsSet = 1,
+                    clearsLockout = true,
                     opensCbaTableAfter = true
                 ),
                 LaborNegotiationChoice(
                     id = "choice_hard_cap_offer",
-                    title = "Impose Last-Best Hardline Offer",
+                    title = "Enforce Compact 12 & Hard Cap (Risks Lockout)",
                     stanceTag = "HARDLINE STANCE",
-                    summary = "Freeze player share and enforce strict cost containment, preserving cash reserves at the expense of public trust.",
+                    summary = "Reject roster expansion and impose a strict hard cap freeze; failing to reach a deal activates an immediate lockout if impasse escalates.",
                     projectedCashImpactMillions = 3L,
                     projectedWeeklyNetImpactMillions = 2L,
                     projectedValuationImpactMillions = -12L,
                     projectedFanMoraleDelta = -8,
                     projectedFanLoyaltyDelta = -4,
                     projectedUnionSatisfactionDelta = -12,
-                    projectedStrikeRiskDelta = 15
+                    projectedStrikeRiskDelta = 18,
+                    requestedSalaryCapType = SalaryCapType.HARD_CAP,
+                    requestedRosterSizeRule = RosterSizeRule.COMPACT_12,
+                    activatesLockoutOnReject = true
                 )
             )
 
@@ -790,10 +923,11 @@ class CoreSimulationViewModel : ViewModel() {
     ): LaborUnionTriggerEvent? {
         val current = _simulationState.value.activeLaborTrigger ?: return null
         val resolved = when (current.type) {
+            LaborTriggerType.LOCKOUT_ACTIVE -> !updatedAgreement.isLockoutActive && updatedAgreement.cbaYearsRemaining >= 1
             LaborTriggerType.CBA_EXPIRED,
-            LaborTriggerType.CBA_EXPIRING_SOON -> updatedAgreement.cbaYearsRemaining >= 2
+            LaborTriggerType.CBA_EXPIRING_SOON -> !updatedAgreement.isLockoutActive && updatedAgreement.cbaYearsRemaining >= 2
             LaborTriggerType.STRIKE_THREAT_CRITICAL,
-            LaborTriggerType.WORK_STOPPAGE_ALERT -> updatedAgreement.strikeRisk < 50 && updatedAgreement.unionSatisfaction >= 50
+            LaborTriggerType.WORK_STOPPAGE_ALERT -> !updatedAgreement.isLockoutActive && updatedAgreement.strikeRisk < 50 && updatedAgreement.unionSatisfaction >= 50
             LaborTriggerType.REVENUE_SHARE_DISPUTE -> updatedAgreement.playerRevenueSharePct >= 49
             LaborTriggerType.TRAVEL_SAFETY_GRIEVANCE ->
                 updatedAgreement.mandatoryPrivateCharterFlights && updatedAgreement.maxBackToBackGamesLimit
@@ -880,7 +1014,140 @@ class CoreSimulationViewModel : ViewModel() {
         )
     }
 
+    private fun simulateLockoutSuspendedWeek(state: LeagueUiState): LeagueUiState {
+        val week = state.currentWeek
+        val regWeeks = state.ruleBook.regularSeasonWeeks.coerceIn(14, 22)
+        val nextWeek = week + 1
+        val nextPhase = when {
+            week >= regWeeks -> SeasonPhase.OFF_SEASON
+            else -> SeasonPhase.REGULAR_SEASON
+        }
+        val newCash = (state.cashReservesMillions - 5L).coerceAtLeast(0L)
+        val newValuation = (state.leagueValuationMillions - 8L).coerceAtLeast(100L)
+        val hitFranchises = state.franchises.map { team ->
+            team.copy(
+                fanMorale = (team.fanMorale - 3).coerceIn(15, 99),
+                fanLoyalty = (team.fanLoyalty - 2).coerceIn(15, 100)
+            )
+        }
+        val updatedUnion = state.unionAgreement.copy(
+            lockoutWeeksLost = state.unionAgreement.lockoutWeeksLost + 1,
+            strikeRisk = (state.unionAgreement.strikeRisk + 3).coerceAtMost(95),
+            unionSatisfaction = (state.unionAgreement.unionSatisfaction - 2).coerceAtLeast(15)
+        )
+        val lockoutHeadline = "LOCKOUT SUSPENSION (W$week): Games canceled due to unresolved CBA dispute (-\$5M cash, -\$8M valuation)."
+        val lockoutSnapshot = FinancialSnapshot(
+            periodLabel = "W$week",
+            weekNumber = week,
+            broadcastRevenue = 0f,
+            sponsorshipRevenue = 0f,
+            expansionFeeRevenue = 0f,
+            luxuryTaxRevenue = 0f,
+            totalRevenue = 0f,
+            operationsExpense = 5.0f,
+            marketingExpense = 0f,
+            welfareAndGrantsExpense = 0f,
+            totalExpenses = 5.0f,
+            netCashFlow = -5.0f,
+            cashReserves = newCash.toFloat(),
+            valuation = newValuation.toFloat()
+        )
+        val updatedSnapshots = (state.financialSnapshots + lockoutSnapshot).takeLast(24)
+
+        var nextState = state.copy(
+            currentWeek = nextWeek,
+            seasonPhase = nextPhase,
+            franchises = hitFranchises,
+            unionAgreement = updatedUnion,
+            cashReservesMillions = newCash,
+            leagueValuationMillions = newValuation,
+            financialSnapshots = updatedSnapshots,
+            lastRevenueBreakdown = WeeklyRevenueBreakdown(
+                seasonYear = state.currentYear,
+                weekNumber = week,
+                phaseLabel = "Week $week Lockout Suspension",
+                weeklyBroadcastRevenueMillions = 0.0,
+                weeklySponsorRevenueMillions = 0.0,
+                loyaltyGateShareMillions = 0.0,
+                rivalryGateShareMillions = 0.0,
+                luxuryTaxCollectedMillions = 0L,
+                grossLeagueRevenueMillions = 0L,
+                playerRevenueSharePct = updatedUnion.playerRevenueSharePct,
+                playerRevenueShareCostMillions = 0.0,
+                operationsCostMillions = 5L,
+                marketingCostMillions = 0.0,
+                welfareAndGrantsCostMillions = 0.0,
+                netCashFlowMillions = -5L,
+                valuationDeltaMillions = -8L,
+                snapshot = lockoutSnapshot
+            ),
+            recentNews = (listOf(lockoutHeadline) + state.recentNews).take(20)
+        )
+
+        if (nextPhase == SeasonPhase.OFF_SEASON) {
+            val offSeasonSession = OffSeasonEngine.createOffSeasonSession(
+                year = state.currentYear,
+                franchises = nextState.franchises,
+                sportType = state.sportType,
+                ruleBook = state.ruleBook,
+                initialParity = state.competitiveParityScore,
+                careerStats = state.careerPlayerStats,
+                seasonStats = state.seasonPlayerStats,
+                weeklyAwards = state.weeklyAwards,
+                champion = state.seasonChampion,
+                autoCompleteDraft = false
+            )
+            nextState = nextState.copy(activeOffSeasonSession = offSeasonSession, showOffSeasonScreen = true)
+        }
+
+        val triggerEval = evaluateLaborUnionTriggers(nextState, revenueBreakdown = null, justRolledSeason = false)
+        val lockoutSentiment = FanSentimentEngine.recordDecisionReaction(
+            currentState = nextState.fanSentimentState,
+            category = FanDecisionCategory.LABOR_CBA,
+            decisionTitle = "Week $week Lockout Cancellations",
+            decisionSummary = lockoutHeadline,
+            casualDelta = -3,
+            dieHardDelta = -4,
+            franchiseName = nextState.leagueName,
+            cityName = nextState.franchises.firstOrNull()?.cityName ?: "Metro",
+            sportType = nextState.sportType,
+            seasonYear = nextState.currentYear,
+            weekNumber = week,
+            seedOffset = week + 40
+        )
+        val preTrend = nextState.copy(
+            unionAgreement = triggerEval.updatedUnionAgreement,
+            activeLaborTrigger = triggerEval.triggeredEvent ?: nextState.activeLaborTrigger,
+            activeLaborNegotiationOverlay = triggerEval.negotiationOverlay ?: nextState.activeLaborNegotiationOverlay,
+            laborTriggerHistory = _simulationState.value.laborTriggerHistory,
+            fanSentimentState = lockoutSentiment,
+            jobSecurityLegacyState = JobSecurityLegacyEngine.recalculateLiveSecurity(
+                current = nextState.jobSecurityLegacyState,
+                input = nextState.toPerformanceInput(),
+                eventNote = lockoutHeadline
+            )
+        )
+        val updatedTrends = appendDashboardTrendPoint(
+            state = preTrend,
+            periodLabel = "W$week",
+            eventTag = "lockout_w$week"
+        )
+        _seasonProgressionEvents.tryEmit(
+            SeasonProgressionEvent.WeekSimulated(
+                year = state.currentYear,
+                simulatedWeek = week,
+                nextWeek = nextWeek,
+                nextPhase = nextPhase,
+                netCashFlowMillions = -5L
+            )
+        )
+        return preTrend.copy(dashboardTrends = updatedTrends)
+    }
+
     private fun simulateRegularSeasonWeek(state: LeagueUiState): LeagueUiState {
+        if (state.unionAgreement.isLockoutActive) {
+            return simulateLockoutSuspendedWeek(state)
+        }
         val week = state.currentWeek
         val sport = state.sportType
         val committeeModifiers = RuleCommitteeEngine.computeSimulationModifiers(state.ruleCommitteeState, sport)
@@ -1354,14 +1621,64 @@ class CoreSimulationViewModel : ViewModel() {
             )
         )
 
+        val periodicBroadcastResult = if (week % 3 == 0 && resultState.broadcastBiddingSession.offers.isNotEmpty()) {
+            BroadcastBiddingEngine.receivePeriodicRivalBid(
+                session = resultState.broadcastBiddingSession,
+                currentContract = resultState.activeBroadcast,
+                teamCount = resultState.franchises.size,
+                playerRevenueSharePct = resultState.unionAgreement.playerRevenueSharePct,
+                currentFanbaseMillions = resultState.totalLeagueFanbaseMillions,
+                currentYear = resultState.currentYear,
+                weekNumber = week
+            )
+        } else null
+
+        if (periodicBroadcastResult != null && periodicBroadcastResult.headline != null) {
+            emitDashboardSnackbar(
+                DashboardSnackbarEvent(
+                    id = "snack_tv_bid_${resultState.currentYear}_w$week",
+                    type = if (periodicBroadcastResult.exclusivityJustExpired) DashboardAlertType.CRISIS_ALERT else DashboardAlertType.FINANCIAL_MILESTONE,
+                    severity = if (periodicBroadcastResult.exclusivityJustExpired) DashboardAlertSeverity.CRITICAL else DashboardAlertSeverity.INFO,
+                    message = periodicBroadcastResult.headline,
+                    actionLabel = "Bids",
+                    targetRoute = DashboardSnackbarRoute.BROADCAST_WAR_ROOM
+                )
+            )
+        }
+
+        val updatedActiveBroadcast = if (periodicBroadcastResult?.exclusivityJustExpired == true && resultState.activeBroadcast.hasExclusivity) {
+            resultState.activeBroadcast.copy(
+                hasExclusivity = false,
+                exclusivityLostPenaltyPct = BroadcastBiddingEngine.EXPIRY_REVENUE_PENALTY_PCT
+            )
+        } else {
+            resultState.activeBroadcast
+        }
+        val postBroadcastFanbase = if (periodicBroadcastResult?.exclusivityJustExpired == true) {
+            (Math.round((resultState.totalLeagueFanbaseMillions * 0.96) * 100.0) / 100.0).coerceAtLeast(1.0)
+        } else {
+            resultState.totalLeagueFanbaseMillions
+        }
+
         val finalPreTrendState = resultState.copy(
             unionAgreement = triggerEval.updatedUnionAgreement,
             activeLaborTrigger = triggerEval.triggeredEvent ?: resultState.activeLaborTrigger,
             activeLaborNegotiationOverlay = triggerEval.negotiationOverlay ?: resultState.activeLaborNegotiationOverlay,
             laborTriggerHistory = _simulationState.value.laborTriggerHistory,
-            recentNews = compiledNews
+            broadcastBiddingSession = periodicBroadcastResult?.updatedSession ?: resultState.broadcastBiddingSession,
+            activeBroadcast = updatedActiveBroadcast,
+            totalLeagueFanbaseMillions = postBroadcastFanbase,
+            recentNews = (listOfNotNull(periodicBroadcastResult?.headline) + compiledNews).take(20)
+        )
+        val updatedFanSentiment = FanSentimentEngine.runWeeklyBroadcastPulse(
+            currentState = finalPreTrendState.fanSentimentState,
+            franchises = finalPreTrendState.franchises,
+            sportType = sport,
+            seasonYear = finalPreTrendState.currentYear,
+            weekNumber = week
         )
         val securityRefreshedPreTrend = finalPreTrendState.copy(
+            fanSentimentState = updatedFanSentiment,
             jobSecurityLegacyState = JobSecurityLegacyEngine.recalculateLiveSecurity(
                 current = finalPreTrendState.jobSecurityLegacyState,
                 input = finalPreTrendState.toPerformanceInput(),
@@ -1425,7 +1742,22 @@ class CoreSimulationViewModel : ViewModel() {
             recentNews = (listOf(simulationOutcome.headline) + faSweep.headlines + facilityTick.headlines + recoveryTick.clearanceHeadlines + state.recentNews).take(20)
         )
         _seasonProgressionEvents.tryEmit(SeasonProgressionEvent.AllStarShowcaseCompleted(state.currentYear, simulationOutcome.netRevenueMillions))
+        val allStarSentiment = FanSentimentEngine.recordDecisionReaction(
+            currentState = nextState.fanSentimentState,
+            category = FanDecisionCategory.ALL_STAR_SCHEDULE,
+            decisionTitle = "All-Star Showcase (${state.allStarRedesignState.selectedFormat.displayName})",
+            decisionSummary = simulationOutcome.headline,
+            casualDelta = (simulationOutcome.moraleDelta + 2).coerceIn(1, 6),
+            dieHardDelta = simulationOutcome.loyaltyDelta.coerceIn(-3, 5),
+            franchiseName = state.leagueName,
+            cityName = state.allStarRedesignState.hostCityName,
+            sportType = state.sportType,
+            seasonYear = state.currentYear,
+            weekNumber = state.currentWeek,
+            seedOffset = state.currentYear + 11
+        )
         val securityNextState = nextState.copy(
+            fanSentimentState = allStarSentiment,
             jobSecurityLegacyState = JobSecurityLegacyEngine.recalculateLiveSecurity(
                 current = nextState.jobSecurityLegacyState,
                 input = nextState.toPerformanceInput(),
@@ -1640,10 +1972,56 @@ class CoreSimulationViewModel : ViewModel() {
                     targetRoute = DashboardSnackbarRoute.STANDINGS
                 )
             )
+            val rivalPoachResult = RivalLeagueEngine.processOffseasonPoaching(
+                rivalLeague = state.rivalLeague,
+                freeAgentPool = playoffFaSweep.updatedPool,
+                seasonYear = state.currentYear,
+                existingCities = state.cities
+            )
+            if (rivalPoachResult.triggeredAbsorptionNegotiation != null) {
+                emitDashboardSnackbar(
+                    DashboardSnackbarEvent(
+                        id = "snack_rival_absorption_${state.currentYear}",
+                        type = DashboardAlertType.CRISIS_ALERT,
+                        severity = DashboardAlertSeverity.CRITICAL,
+                        message = rivalPoachResult.triggeredAbsorptionNegotiation.headline,
+                        actionLabel = "Summit",
+                        targetRoute = DashboardSnackbarRoute.RIVAL_WATCH
+                    )
+                )
+            } else if (rivalPoachResult.headline != null && (rivalPoachResult.newlyPoachedPlayers.isNotEmpty() || rivalPoachResult.didFoldRivalLeague)) {
+                emitDashboardSnackbar(
+                    DashboardSnackbarEvent(
+                        id = "snack_rival_poach_${state.currentYear}",
+                        type = if (rivalPoachResult.didFoldRivalLeague) DashboardAlertType.SEASON_MILESTONE else DashboardAlertType.CRISIS_ALERT,
+                        severity = if (rivalPoachResult.didFoldRivalLeague) DashboardAlertSeverity.MILESTONE else DashboardAlertSeverity.WARNING,
+                        message = rivalPoachResult.headline,
+                        actionLabel = "Rival Watch",
+                        targetRoute = DashboardSnackbarRoute.RIVAL_WATCH
+                    )
+                )
+            }
+            val stadiumCheck = StadiumDealEngine.processOffseasonStadiumsAndCheckUltimatums(
+                currentState = state.stadiumDealState,
+                franchises = updatedFranchises,
+                seasonYear = state.currentYear
+            )
+            if (stadiumCheck.triggeredUltimatums.isNotEmpty()) {
+                emitDashboardSnackbar(
+                    DashboardSnackbarEvent(
+                        id = "snack_stadium_ultimatum_${state.currentYear}",
+                        type = DashboardAlertType.CRISIS_ALERT,
+                        severity = DashboardAlertSeverity.CRITICAL,
+                        message = stadiumCheck.triggeredUltimatums.first().headline,
+                        actionLabel = "Desk",
+                        targetRoute = DashboardSnackbarRoute.STADIUM_ULTIMATUM
+                    )
+                )
+            }
             val preUpcomingSchedule = ScheduleCalendarEngine.generateFullSeasonSchedule(
                 targetYear = state.currentYear + 1,
                 regularSeasonWeeks = state.ruleBook.regularSeasonWeeks,
-                franchises = updatedFranchises,
+                franchises = stadiumCheck.updatedFranchises,
                 rivalries = playoffRivalryResult.updatedRivalries,
                 cities = state.cities,
                 sportType = sport
@@ -1653,7 +2031,7 @@ class CoreSimulationViewModel : ViewModel() {
                 seasonPhase = SeasonPhase.OFF_SEASON,
                 seasonChampion = champion,
                 seasonRunnerUp = runnerUp,
-                franchises = updatedFranchises,
+                franchises = stadiumCheck.updatedFranchises,
                 minorLeagueState = minorPoFinals.minorState,
                 cashReservesMillions = state.cashReservesMillions + playoffRivalryCashCut,
                 leagueValuationMillions = state.leagueValuationMillions + playoffFacilityTick.totalLeagueValuationGainMillions,
@@ -1670,15 +2048,17 @@ class CoreSimulationViewModel : ViewModel() {
                 careerPlayerStats = finalCareerStats,
                 injuryReportHistory = (playoffInjurySim.newInjuryLogs + state.injuryReportHistory).take(50),
                 rivalries = playoffRivalryResult.updatedRivalries,
-                freeAgentPool = playoffFaSweep.updatedPool,
+                freeAgentPool = rivalPoachResult.updatedFreeAgentPool,
                 freeAgentSignings = (playoffFaSweep.newSignings + state.freeAgentSignings).take(40),
+                rivalLeague = rivalPoachResult.updatedRivalLeague,
+                stadiumDealState = stadiumCheck.updatedStadiumDealState,
                 tradedPickLedger = TradeEngine.buildTradedPickLedger(
-                    franchises = updatedFranchises,
+                    franchises = stadiumCheck.updatedFranchises,
                     currentYear = state.currentYear,
                     activeSession = offSeasonSession,
                     latestCompletedOffSeason = state.latestCompletedOffSeason
                 ),
-                recentNews = (listOf("CHAMPION CROWNED! ${champion.teamFullName} lift the Apex Commissioner Trophy!") + minorPoFinals.headlines + playoffFaSweep.headlines + playoffFacilityTick.headlines + playoffRivalryResult.headlines + playoffInjurySim.headlines + recoveryTick.clearanceHeadlines + statsResult.brokenAlerts + listOfNotNull(potwNews) + state.recentNews).take(20)
+                recentNews = (listOf("CHAMPION CROWNED! ${champion.teamFullName} lift the Apex Commissioner Trophy!") + stadiumCheck.headlines + listOfNotNull(rivalPoachResult.headline) + minorPoFinals.headlines + playoffFaSweep.headlines + playoffFacilityTick.headlines + playoffRivalryResult.headlines + playoffInjurySim.headlines + recoveryTick.clearanceHeadlines + statsResult.brokenAlerts + listOfNotNull(potwNews) + state.recentNews).take(20)
             )
             val reviewInput = preTrendState.toPerformanceInput(seasonChampionNameOverride = champion.teamFullName)
             val generatedReview = JobSecurityLegacyEngine.generateAnnualReview(
@@ -1979,6 +2359,24 @@ class CoreSimulationViewModel : ViewModel() {
             currentPool = state.freeAgentPool, franchises = updatedFranchises, sportType = state.sportType,
             seasonYear = nextYear, minPoolSize = 22, seedOffset = nextYear
         )
+        val offseasonRivalCheck = RivalLeagueEngine.processOffseasonPoaching(
+            rivalLeague = state.rivalLeague,
+            freeAgentPool = refreshedFaPool,
+            seasonYear = state.currentYear,
+            existingCities = state.cities
+        )
+        if (offseasonRivalCheck.triggeredAbsorptionNegotiation != null) {
+            emitDashboardSnackbar(
+                DashboardSnackbarEvent(
+                    id = "snack_rival_absorption_roll_${state.currentYear}",
+                    type = DashboardAlertType.CRISIS_ALERT,
+                    severity = DashboardAlertSeverity.CRITICAL,
+                    message = offseasonRivalCheck.triggeredAbsorptionNegotiation.headline,
+                    actionLabel = "Summit",
+                    targetRoute = DashboardSnackbarRoute.RIVAL_WATCH
+                )
+            )
+        }
         val rolledPickFranchises = TradeEngine.rollDraftPicksForNewSeason(
             franchises = updatedFranchises, finishedYear = state.currentYear, nextYear = nextYear,
             deferredSlots = session.draftOrderSlots.filter { it.retainedDueToProtection }
@@ -1989,6 +2387,11 @@ class CoreSimulationViewModel : ViewModel() {
         val minorRollover = MinorLeagueEngine.rolloverForNewSeason(
             currentMinorState = state.minorLeagueState, franchises = rolledPickFranchises,
             sportType = state.sportType, finishedYear = state.currentYear, nextYear = nextYear
+        )
+        val stadiumRolloverCheck = StadiumDealEngine.processOffseasonStadiumsAndCheckUltimatums(
+            currentState = state.stadiumDealState,
+            franchises = minorRollover.updatedFranchises,
+            seasonYear = state.currentYear
         )
 
         val rolledRefs = state.officiatingState.referees.map {
@@ -2023,9 +2426,11 @@ class CoreSimulationViewModel : ViewModel() {
             totalWeeks = ScheduleCalendarEngine.totalWeeksFor(targetRegWeeks),
             seasonPhase = SeasonPhase.PRE_SEASON,
             competitiveParityScore = session.finalParityScore,
-            franchises = minorRollover.updatedFranchises,
+            franchises = stadiumRolloverCheck.updatedFranchises,
             minorLeagueState = minorRollover.minorState,
-            freeAgentPool = refreshedFaPool,
+            freeAgentPool = offseasonRivalCheck.updatedFreeAgentPool,
+            rivalLeague = offseasonRivalCheck.updatedRivalLeague,
+            stadiumDealState = stadiumRolloverCheck.updatedStadiumDealState,
             unionAgreement = rolledUnionAgreement,
             officiatingState = rolledOfficiatingState,
             leagueValuationMillions = state.leagueValuationMillions + offSeasonFacilityTick.totalLeagueValuationGainMillions + facilityAppreciationDelta,
@@ -2105,12 +2510,27 @@ class CoreSimulationViewModel : ViewModel() {
         } else preTriggerState
 
         val triggerEval = evaluateLaborUnionTriggers(postReviewRolloverState, revenueBreakdown = null, justRolledSeason = true)
+        val rolloverSentiment = FanSentimentEngine.recordDecisionReaction(
+            currentState = postReviewRolloverState.fanSentimentState,
+            category = FanDecisionCategory.EXPANSION_TRADE,
+            decisionTitle = "Season $nextYear Inauguration & Draft Class",
+            decisionSummary = headline,
+            casualDelta = 3,
+            dieHardDelta = 2,
+            franchiseName = postReviewRolloverState.leagueName,
+            cityName = postReviewRolloverState.franchises.firstOrNull()?.cityName ?: "Metro",
+            sportType = postReviewRolloverState.sportType,
+            seasonYear = nextYear,
+            weekNumber = 0,
+            seedOffset = nextYear
+        )
         val preTrendFinalState = postReviewRolloverState.copy(
             unionAgreement = triggerEval.updatedUnionAgreement,
             activeLaborTrigger = triggerEval.triggeredEvent ?: postReviewRolloverState.activeLaborTrigger,
             activeLaborNegotiationOverlay = triggerEval.negotiationOverlay ?: postReviewRolloverState.activeLaborNegotiationOverlay,
             laborTriggerHistory = _simulationState.value.laborTriggerHistory,
-            recentNews = (triggerEval.headlines + listOf(headline) + minorRollover.headlines + offSeasonFacilityTick.headlines + postReviewRolloverState.recentNews).take(20)
+            fanSentimentState = rolloverSentiment,
+            recentNews = (triggerEval.headlines + listOf(headline) + stadiumRolloverCheck.headlines + listOfNotNull(offseasonRivalCheck.headline) + minorRollover.headlines + offSeasonFacilityTick.headlines + postReviewRolloverState.recentNews).take(20)
         ).let { s ->
             s.copy(
                 jobSecurityLegacyState = JobSecurityLegacyEngine.recalculateLiveSecurity(

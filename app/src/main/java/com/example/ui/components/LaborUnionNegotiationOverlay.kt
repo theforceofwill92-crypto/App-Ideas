@@ -449,6 +449,77 @@ private fun LaborNegotiationChoiceCard(
                 lineHeight = 17.sp
             )
 
+            if (choice.requestedSalaryCapMillions != null ||
+                choice.requestedRosterSizeRule != null ||
+                choice.clearsLockout ||
+                choice.activatesLockoutOnReject
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    choice.requestedSalaryCapMillions?.let { capM ->
+                        Surface(
+                            color = GoldPrimary.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "Cap \$${capM}M",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = GoldPrimary,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    choice.requestedRosterSizeRule?.let { rosterRule ->
+                        Surface(
+                            color = CyanAccent.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = rosterRule.displayName,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CyanAccent,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    if (choice.clearsLockout) {
+                        Surface(
+                            color = EmeraldAccent.copy(alpha = 0.16f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "Lifts Lockout",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Black,
+                                color = EmeraldAccent,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    } else if (choice.activatesLockoutOnReject) {
+                        Surface(
+                            color = CrimsonAlert.copy(alpha = 0.16f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "Lockout Risk",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Black,
+                                color = CrimsonAlert,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             // Projected Financial & Fan Sentiment Impacts
             Column(
                 modifier = Modifier.fillMaxWidth(),

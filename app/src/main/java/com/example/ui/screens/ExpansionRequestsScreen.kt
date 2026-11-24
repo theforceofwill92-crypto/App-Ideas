@@ -21,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -428,8 +429,22 @@ fun ExpansionRequestsScreen(
                 }
             } else {
                 items(displayedRequests, key = { it.id }) { req ->
+                    val cba = remember(
+                        req.city,
+                        uiState.franchises,
+                        uiState.activeBroadcast,
+                        uiState.activeSponsorship
+                    ) {
+                        ExpansionRequestEngine.analyzeMarketCostBenefit(
+                            city = req.city,
+                            franchises = uiState.franchises,
+                            activeBroadcast = uiState.activeBroadcast,
+                            activeSponsorship = uiState.activeSponsorship
+                        )
+                    }
                     ExpansionRequestManagementCard(
                         request = req,
+                        costBenefit = cba,
                         onApproveDirect = {
                             val success = viewModel.approveExpansionRequest(req.id, launchDraftImmediately = false)
                             if (success) {
@@ -492,6 +507,7 @@ private fun BaselineKpiTile(
 @Composable
 private fun ExpansionRequestManagementCard(
     request: ExpansionRequest,
+    costBenefit: com.example.model.MarketCostBenefitAnalysis,
     onApproveDirect: () -> Unit,
     onApproveAndDraft: () -> Unit,
     onDecline: () -> Unit
@@ -804,6 +820,43 @@ private fun ExpansionRequestManagementCard(
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = GoldPrimary.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, GoldPrimary.copy(alpha = 0.35f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics(mergeDescendants = true) {}
+                            .testTag("cba_summary_${request.id}")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "CBA ${costBenefit.cbaGrade} • Outlay \$${costBenefit.totalCapitalOutlayMillions}M",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = GoldPrimary
+                            )
+                            Text(
+                                text = "+\$${costBenefit.projectedNetAnnualBenefitMillions}M/yr Net",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = EmeraldAccent
+                            )
+                            Text(
+                                text = "+${costBenefit.fiveYearRoiPct.toInt()}% 5Y • ${costBenefit.paybackYears}y",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = CyanAccent
+                            )
+                        }
+                    }
                 }
             }
 

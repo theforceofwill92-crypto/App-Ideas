@@ -36,6 +36,7 @@ import com.example.model.SeasonPhase
 import com.example.ui.components.DashboardSnackbarEffect
 import com.example.ui.components.DashboardSnackbarHost
 import com.example.ui.components.RechartsDualTrendLineChart
+import com.example.ui.components.RechartsExecutiveTrendsChart
 import com.example.ui.theme.*
 import com.example.viewmodel.LeagueUiState
 import com.example.viewmodel.LeagueViewModel
@@ -297,8 +298,8 @@ fun MainDashboardMetricsPanel(
                         sentimentLabel = sentimentLabel,
                         sentimentColor = sentimentColor,
                         globalFanbaseMillions = uiState.totalLeagueFanbaseMillions,
-                        avgMorale = avgMorale.roundToInt(),
-                        avgLoyalty = avgLoyalty.roundToInt(),
+                        casualScore = uiState.fanSentimentState.casualSentimentScore,
+                        dieHardScore = uiState.fanSentimentState.dieHardSentimentScore,
                         onClick = onFanSentimentClick,
                         modifier = Modifier.weight(1f)
                     )
@@ -327,8 +328,8 @@ fun MainDashboardMetricsPanel(
                         sentimentLabel = sentimentLabel,
                         sentimentColor = sentimentColor,
                         globalFanbaseMillions = uiState.totalLeagueFanbaseMillions,
-                        avgMorale = avgMorale.roundToInt(),
-                        avgLoyalty = avgLoyalty.roundToInt(),
+                        casualScore = uiState.fanSentimentState.casualSentimentScore,
+                        dieHardScore = uiState.fanSentimentState.dieHardSentimentScore,
                         onClick = onFanSentimentClick,
                         modifier = Modifier.weight(1f)
                     )
@@ -381,6 +382,10 @@ fun MainDashboardMetricsPanel(
             // League Financial Growth & Fan Sentiment Line Chart
             val trendSeries = uiState.dashboardTrends.ifEmpty { simulationState.dashboardTrends }
             RechartsDualTrendLineChart(
+                data = trendSeries,
+                modifier = Modifier.fillMaxWidth()
+            )
+            RechartsExecutiveTrendsChart(
                 data = trendSeries,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -575,8 +580,8 @@ private fun FanSentimentMetricCard(
     sentimentLabel: String,
     sentimentColor: Color,
     globalFanbaseMillions: Double,
-    avgMorale: Int,
-    avgLoyalty: Int,
+    casualScore: Int,
+    dieHardScore: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -663,7 +668,7 @@ private fun FanSentimentMetricCard(
             )
 
             Text(
-                text = "${globalFanbaseMillions}M Fans • M $avgMorale / L $avgLoyalty",
+                text = "Casual $casualScore% • Die-Hard $dieHardScore% (${globalFanbaseMillions}M)",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

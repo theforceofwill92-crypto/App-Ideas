@@ -197,4 +197,47 @@ class BroadcastBiddingTest {
 
         composeTestRule.onNodeWithTag("finances_screen_content").assertIsDisplayed()
     }
+
+    @Test
+    fun periodicBroadcastBidsCountdownExclusivityAndApplyExpiryPenaltiesWhenWaitingTooLong() {
+        val context = ApplicationProvider.getApplicationContext<Context>() as Application
+        val vm = LeagueViewModel(context)
+
+        val initialSession = vm.uiState.value.broadcastBiddingSession
+        val initialOfferPayout = initialSession.offers.first().annualPayoutMillions
+        assertFalse(initialSession.exclusivityExpired)
+        assertEquals(3, initialSession.exclusivityRoundsRemaining)
+
+        // Trigger 1st & 2nd periodic rival bids -> still exclusive
+        val tick1 = vm.triggerPeriodicBroadcastBidNow()
+        assertNotNull(tick1.bidderName)
+        assertFalse(tick1.exclusivityJustExpired)
+        assertEquals(2, vm.uiState.value.broadcastBiddingSession.exclusivityRoundsRemaining)
+
+        val tick2 = vm.triggerPeriodicBroadcastBidNow()
+        assertFalse(tick2.exclusivityJustExpired)
+        assertEquals(1, vm.uiState.value.broadcastBiddingSession.exclusivityRoundsRemaining)
+
+        // 3rd periodic bid expires exclusivity -> -22% revenue / -20% reach penalty applied
+        val tick3 = vm.triggerPeriodicBroadcastBidNow()
+        assertTrue(tick3.exclusivityJustExpired)
+        val expiredSession = vm.uiState.value.broadcastBiddingSession
+        assertTrue(expiredSession.exclusivityExpired)
+        assertEquals(0, expiredSession.exclusivityRoundsRemaining)
+        assertFalse(vm.uiState.value.activeBroadcast.hasExclusivity)
+        assertEquals(22, vm.uiState.value.activeBroadcast.exclusivityLostPenaltyPct)
+        assertTrue(expiredSession.offers.all { it.isExclusivityExpired })
+        assertTrue(expiredSession.offers.first().annualPayoutMillions < initialOfferPayout)
+
+        // Verify expiry banner appears on BroadcastNegotiationsScreen
+        composeTestRule.setContent {
+            val uiState by vm.uiState.collectAsState()
+            MyApplicationTheme {
+                BroadcastNegotiationsScreen(uiState = uiState, viewModel = vm)
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("broadcast_expiry_banner").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("btn_periodic_rival_bid").assertIsDisplayed()
+    }
 }

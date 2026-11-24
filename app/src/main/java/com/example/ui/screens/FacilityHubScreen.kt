@@ -257,9 +257,9 @@ fun FacilityHubScreen(
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
                                         Text(
-                                            text = "%,d Seats • \$${fac.cumulativeInvestedMillions}M Invested • ${fac.completedUpgradesCount} Upgrades".format(selectedTeam.stadiumCapacity),
+                                            text = "%,d Seats • Age ${selectedTeam.stadiumAge}y • ${selectedTeam.stadiumCondition}% Cond • \$${fac.cumulativeInvestedMillions}M Invested".format(selectedTeam.stadiumCapacity),
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = if (selectedTeam.stadiumAge > 25 && selectedTeam.stadiumCondition < 50) CrimsonAlert else MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
 

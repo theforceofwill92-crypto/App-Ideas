@@ -8,6 +8,52 @@ enum class ExpansionApplicationStatus(val label: String) {
     DECLINED("Declined")
 }
 
+enum class ExpansionArenaTier(
+    val displayName: String,
+    val capacity: Int,
+    val buildCostMillions: Long,
+    val sponsorBoostMillions: Long,
+    val readinessSummary: String
+) {
+    BOUTIQUE_MODERN(
+        displayName = "Boutique Modern Bowl",
+        capacity = 18500,
+        buildCostMillions = 18L,
+        sponsorBoostMillions = 6L,
+        readinessSummary = "18,500-seat Boutique Modern Bowl (Commissioned)"
+    ),
+    PREMIER_ARENA(
+        displayName = "Premier Metro Arena",
+        capacity = 21500,
+        buildCostMillions = 32L,
+        sponsorBoostMillions = 12L,
+        readinessSummary = "21,500-seat Premier Metro Arena (Commissioned)"
+    ),
+    MEGAPLEX_DOME(
+        displayName = "Global Megaplex Dome",
+        capacity = 24500,
+        buildCostMillions = 48L,
+        sponsorBoostMillions = 20L,
+        readinessSummary = "24,500-seat Global Megaplex Dome (Commissioned)"
+    )
+}
+
+data class MarketCostBenefitAnalysis(
+    val cityId: String,
+    val cityName: String,
+    val upfrontArenaBuildCostMillions: Long,
+    val expansionBuyInFeeMillions: Long,
+    val totalCapitalOutlayMillions: Long,
+    val projectedAnnualRevenueMillions: Long,
+    val projectedAnnualOperatingCostMillions: Long,
+    val projectedNetAnnualBenefitMillions: Long,
+    val paybackYears: Double,
+    val fiveYearRoiPct: Double,
+    val cbaGrade: String,
+    val recommendationNote: String,
+    val hasConstructedArena: Boolean
+)
+
 data class ExpansionRequestImpact(
     val currentLeagueMarketReachMillions: Double,
     val projectedMarketReachGainMillions: Double,
@@ -296,5 +342,73 @@ object ExpansionRequestEngine {
                 )
             )
         }
+    }
+
+    fun analyzeMarketCostBenefit(
+        city: MarketCity,
+        franchises: List<Franchise>,
+        activeBroadcast: BroadcastContract,
+        activeSponsorship: ActiveLeagueSponsorship
+    ): MarketCostBenefitAnalysis {
+        val estimatedArenaCost = if (city.hasBuiltExpansionArena && city.arenaBuildCostSpentMillions > 0L) {
+            city.arenaBuildCostSpentMillions
+        } else {
+            when (city.tier) {
+                MarketTier.TIER_1_MEGA, MarketTier.INTERNATIONAL_GATEWAY -> ExpansionArenaTier.PREMIER_ARENA.buildCostMillions
+                MarketTier.HIGH_GROWTH_SUNBELT, MarketTier.TECH_INNOVATION_HUB, MarketTier.REGIONAL_HEARTLAND -> ExpansionArenaTier.BOUTIQUE_MODERN.buildCostMillions
+            }
+        }
+
+        val broadcastUplift = computeAnnualBroadcastUpliftMillions(city)
+        val localSponsor = computeLocalSponsorRevenueMillions(city)
+        val gateRevenue = computeAnnualGateRevenueMillions(city)
+        val annualRevenue = broadcastUplift + localSponsor + gateRevenue
+
+        val safeTeams = franchises.size.coerceAtLeast(1)
+        val broadcastSplitDilution = ((activeBroadcast.annualPayoutMillions.toDouble() / safeTeams) -
+            (activeBroadcast.annualPayoutMillions.toDouble() / (safeTeams + 1))).roundToLong().coerceAtLeast(1L)
+        val sponsorLoad = ((activeSponsorship.annualPayoutMillions * 0.04) + (city.competingMajorTeamsCount * 2.5)).roundToLong()
+        val travelAndOpsCost = (if (city.isInternational) 12L else 7L) + broadcastSplitDilution + sponsorLoad
+        val netAnnualBenefit = (annualRevenue - travelAndOpsCost).coerceAtLeast(4L)
+
+        val capitalBasis = estimatedArenaCost.coerceAtLeast(10L)
+        val totalCapitalOutlay = if (city.hasBuiltExpansionArena) 0L else estimatedArenaCost
+        val paybackYears = (Math.round((capitalBasis.toDouble() / netAnnualBenefit.toDouble()) * 10.0) / 10.0)
+            .coerceIn(0.4, 15.0)
+        val fiveYearNetValue = (netAnnualBenefit * 5L) + city.expansionFeeMillions - capitalBasis
+        val fiveYearRoiPct = Math.round(((fiveYearNetValue.toDouble() / capitalBasis.toDouble()) * 100.0) * 10.0) / 10.0
+
+        val cbaGrade = when {
+            fiveYearRoiPct >= 260.0 && netAnnualBenefit >= 28L -> "A+"
+            fiveYearRoiPct >= 190.0 && netAnnualBenefit >= 22L -> "A"
+            fiveYearRoiPct >= 130.0 -> "B+"
+            fiveYearRoiPct >= 75.0 -> "B"
+            else -> "C"
+        }
+
+        val recommendationNote = buildString {
+            if (city.hasBuiltExpansionArena) {
+                append("${city.expansionArenaTierName.ifBlank { city.arenaName }} already funded. ")
+            } else {
+                append("Requires \$${estimatedArenaCost}M arena outlay (${paybackYears}y payback). ")
+            }
+            append("Generates +\$${netAnnualBenefit}M/yr net surplus vs \$${travelAndOpsCost}M/yr travel & TV dilution cost.")
+        }
+
+        return MarketCostBenefitAnalysis(
+            cityId = city.id,
+            cityName = city.name,
+            upfrontArenaBuildCostMillions = estimatedArenaCost,
+            expansionBuyInFeeMillions = city.expansionFeeMillions,
+            totalCapitalOutlayMillions = totalCapitalOutlay,
+            projectedAnnualRevenueMillions = annualRevenue,
+            projectedAnnualOperatingCostMillions = travelAndOpsCost,
+            projectedNetAnnualBenefitMillions = netAnnualBenefit,
+            paybackYears = paybackYears,
+            fiveYearRoiPct = fiveYearRoiPct,
+            cbaGrade = cbaGrade,
+            recommendationNote = recommendationNote,
+            hasConstructedArena = city.hasBuiltExpansionArena
+        )
     }
 }

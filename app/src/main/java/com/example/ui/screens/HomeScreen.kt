@@ -41,8 +41,10 @@ import com.example.model.BroadcastBidStatus
 import com.example.model.InjuryEngine
 import com.example.model.LaborTriggerSeverity
 import com.example.model.SeasonPhase
+import com.example.model.StadiumDealEngine
 import com.example.ui.components.LeagueNewsComponent
 import com.example.ui.components.SectionHeader
+import com.example.ui.components.StadiumUltimatumCard
 import com.example.ui.components.TeamBadge
 import com.example.ui.theme.*
 import com.example.viewmodel.LeagueUiState
@@ -131,6 +133,9 @@ fun HomeScreen(
     val totalReqRev = uiState.pendingExpansionRequests.sumOf { it.impact.projectedAnnualRevenueGainMillions }
     val ongoingBuilds = uiState.franchises.sumOf { it.facilities.ongoingProjects.size }
     val totalCapacity = uiState.franchises.sumOf { it.stadiumCapacity }
+    val agingStadiumCount = remember(uiState.franchises) {
+        uiState.franchises.count { StadiumDealEngine.qualifiesForUltimatum(it) }
+    }
 
     val asState = uiState.allStarRedesignState
     val asImpact = remember(
@@ -326,7 +331,7 @@ fun HomeScreen(
                 simulationState = simulationState,
                 onSeasonWeekClick = { viewModel.setSelectedTab(5) },
                 onBankBalanceClick = { viewModel.setSelectedTab(3) },
-                onFanSentimentClick = { viewModel.setSelectedTab(1) },
+                onFanSentimentClick = { viewModel.openFanSentimentScreen(true) },
                 onStrikeRiskClick = { viewModel.openLaborUnionScreen(true) },
                 onIntegrityClick = { viewModel.openOfficiatingHub(true) },
                 onJobSecurityClick = { viewModel.openJobSecurityLegacyScreen(true) },
@@ -335,7 +340,73 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(12.dp))
         }
 
-        // 4. Priority Urgent Alerts (shown only when a crisis or CBA trigger requires immediate ruling)
+        // 4. Priority Urgent Alerts (shown only when a crisis, stadium ultimatum, or CBA trigger requires immediate ruling)
+        uiState.stadiumDealState.activeUltimatum?.let { ultimatum ->
+            item(key = "active_stadium_ultimatum") {
+                StadiumUltimatumCard(
+                    ultimatum = ultimatum,
+                    leagueCashMillions = uiState.cashReservesMillions,
+                    onSelectChoice = { choice -> viewModel.resolveStadiumUltimatumChoice(choice) },
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+        }
+
+        if (uiState.unionAgreement.isLockoutActive) {
+            item(key = "home_lockout_banner") {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .testTag("home_lockout_banner")
+                        .border(1.5.dp, CrimsonAlert, RoundedCornerShape(14.dp)),
+                    colors = CardDefaults.cardColors(containerColor = CrimsonAlert.copy(alpha = 0.14f)),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "OWNER LOCKOUT IN EFFECT (${uiState.unionAgreement.lockoutWeeksLost}w lost)",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = CrimsonAlert
+                            )
+                            Text(
+                                text = "Regular season games & broadcast revenues are frozen until a CBA accord is signed.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { viewModel.openLaborNegotiationOverlay() },
+                            colors = ButtonDefaults.buttonColors(containerColor = CrimsonAlert),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("btn_home_resolve_lockout")
+                        ) {
+                            Text(
+                                text = "Emergency Accord",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+        }
+
         if (uiState.activeDilemma != null) {
             item(key = "active_dilemma_alert") {
                 Card(
@@ -517,10 +588,19 @@ fun HomeScreen(
                 DeskHubActionSpec(
                     key = "labor_cba",
                     icon = Icons.Default.Handshake,
-                    accent = unionAccent,
-                    title = if (isHighRisk) "CBA Labor Dispute Warning" else "Players Union & CBA Accord",
-                    subtitle = "Strike Risk ${uiState.unionAgreement.strikeRisk}% • ${uiState.unionAgreement.playerRevenueSharePct}% Rev Split",
-                    buttonLabel = if (isHighRisk) "Avert" else "CBA",
+                    accent = if (uiState.unionAgreement.isLockoutActive) CrimsonAlert else unionAccent,
+                    title = when {
+                        uiState.unionAgreement.isLockoutActive -> "LOCKOUT ACTIVE • Play Suspended"
+                        uiState.unionAgreement.cbaYearsRemaining <= 1 -> "CBA Expiring (${uiState.unionAgreement.cbaYearsRemaining}y) • Labor Talks"
+                        isHighRisk -> "CBA Labor Dispute Warning"
+                        else -> "Players Union & CBA Accord"
+                    },
+                    subtitle = if (uiState.unionAgreement.isLockoutActive) {
+                        "LOCKOUT ACTIVE (${uiState.unionAgreement.lockoutWeeksLost}w lost) • CBA: ${uiState.unionAgreement.cbaYearsRemaining}y left"
+                    } else {
+                        "CBA: ${uiState.unionAgreement.cbaYearsRemaining}y left • Strike ${uiState.unionAgreement.strikeRisk}% • ${uiState.unionAgreement.playerRevenueSharePct}% Split"
+                    },
+                    buttonLabel = if (uiState.unionAgreement.isLockoutActive) "Accord" else if (isHighRisk) "Avert" else "CBA",
                     buttonTestTag = "btn_home_labor_union",
                     rowTestTag = "labor_union_banner",
                     onClick = { viewModel.openLaborUnionScreen(true) }
@@ -623,12 +703,19 @@ fun HomeScreen(
                 DeskHubActionSpec(
                     key = "broadcast",
                     icon = Icons.Default.LiveTv,
-                    accent = CyanAccent,
+                    accent = if (uiState.broadcastBiddingSession.exclusivityExpired) AmberWarning else CyanAccent,
                     title = "Broadcast Rights • ${uiState.activeBroadcast.partnerName}",
-                    subtitle = if (topBid != null) {
-                        "\$${uiState.activeBroadcast.annualPayoutMillions}M/yr • Top Bid: \$${topBid.impact.cumulativeGrossValueMillions}M (${topBid.bidder.name})"
-                    } else {
-                        "\$${uiState.activeBroadcast.annualPayoutMillions}M/yr • ${uiState.activeBroadcast.yearsRemaining} yrs left"
+                    subtitle = run {
+                        val exclText = if (uiState.broadcastBiddingSession.exclusivityExpired) {
+                            "Non-Exclusive (-22%)"
+                        } else {
+                            "Exclusivity: ${uiState.broadcastBiddingSession.exclusivityRoundsRemaining} left"
+                        }
+                        if (topBid != null) {
+                            "\$${uiState.activeBroadcast.annualPayoutMillions}M/yr • Top: \$${topBid.impact.cumulativeGrossValueMillions}M • $exclText"
+                        } else {
+                            "\$${uiState.activeBroadcast.annualPayoutMillions}M/yr • ${uiState.activeBroadcast.yearsRemaining}y left • $exclText"
+                        }
                     },
                     buttonLabel = "Bids",
                     buttonTestTag = "btn_home_negotiate_war_room",
@@ -653,9 +740,13 @@ fun HomeScreen(
                 DeskHubActionSpec(
                     key = "facilities",
                     icon = Icons.Default.Stadium,
-                    accent = EmeraldAccent,
-                    title = if (ongoingBuilds > 0) "Stadiums & Facilities ($ongoingBuilds Builds)" else "Stadiums & Facilities Hub",
-                    subtitle = "%,d League Seats • Arenas & Training Centers".format(totalCapacity),
+                    accent = if (agingStadiumCount > 0) CrimsonAlert else EmeraldAccent,
+                    title = when {
+                        agingStadiumCount > 0 -> "Stadiums & Facilities ($agingStadiumCount Aging)"
+                        ongoingBuilds > 0 -> "Stadiums & Facilities ($ongoingBuilds Builds)"
+                        else -> "Stadiums & Facilities Hub"
+                    },
+                    subtitle = "%,d League Seats • %d At-Risk Arenas".format(totalCapacity, agingStadiumCount),
                     buttonLabel = "Build",
                     buttonTestTag = "btn_open_facility_hub",
                     rowTestTag = "banner_facilities",
@@ -671,6 +762,46 @@ fun HomeScreen(
                     buttonTestTag = "btn_open_all_star_hub",
                     rowTestTag = "banner_all_star_redesign",
                     onClick = { viewModel.openAllStarRedesignScreen(true) }
+                ),
+                DeskHubActionSpec(
+                    key = "rival_watch",
+                    icon = Icons.Default.Visibility,
+                    accent = Color(uiState.rivalLeague.threatColorHex),
+                    title = when {
+                        uiState.rivalLeague.activeAbsorptionNegotiation != null ->
+                            "Merger Summit • ${uiState.rivalLeague.name}"
+                        uiState.rivalLeague.isActive ->
+                            "Rival Watch • ${uiState.rivalLeague.name}"
+                        uiState.rivalLeague.absorbedTeamNames.isNotEmpty() ->
+                            "Rival Absorbed • ${uiState.rivalLeague.absorbedTeamNames.size} Clubs Joined"
+                        else ->
+                            "Rival Watch • ${uiState.rivalLeague.name} (Folded)"
+                    },
+                    subtitle = when {
+                        uiState.rivalLeague.activeAbsorptionNegotiation != null ->
+                            "Survived ${uiState.rivalLeague.seasonsSurvived}Y @ ${uiState.rivalLeague.hype} Hype • Absorb 2–4 Teams for Massive TV Boost!"
+                        uiState.rivalLeague.isActive ->
+                            "\$${uiState.rivalLeague.capital}M Cap • ${uiState.rivalLeague.hype} Hype • ${uiState.rivalLeague.seasonsSurvived}Y Survived • ${uiState.rivalLeague.poachedPlayers.size} Poached"
+                        uiState.rivalLeague.permanentTvRevenueBoostMillions > 0L ->
+                            "Absorbed • +\$${uiState.rivalLeague.permanentTvRevenueBoostMillions}M/yr Permanent TV Revenue Escalator Active"
+                        else ->
+                            "Bankrupt / Absorbed • All poached stars back in Free Agency"
+                    },
+                    buttonLabel = if (uiState.rivalLeague.activeAbsorptionNegotiation != null) "Summit" else "Watch",
+                    buttonTestTag = "btn_open_rival_watch",
+                    rowTestTag = "banner_rival_watch",
+                    onClick = { viewModel.openRivalWatchModal(true) }
+                ),
+                DeskHubActionSpec(
+                    key = "fan_sentiment_pulse",
+                    icon = Icons.Default.Campaign,
+                    accent = if (uiState.fanSentimentState.divergenceGap >= 15) AmberWarning else CyanAccent,
+                    title = "Fan Sentiment & Media Pulse (${uiState.fanSentimentState.polarizationLabel})",
+                    subtitle = "Casual ${uiState.fanSentimentState.casualSentimentScore}% vs Die-Hard ${uiState.fanSentimentState.dieHardSentimentScore}% • Social, Radio & Print",
+                    buttonLabel = "Pulse",
+                    buttonTestTag = "btn_open_fan_sentiment",
+                    rowTestTag = "banner_fan_sentiment",
+                    onClick = { viewModel.openFanSentimentScreen(true) }
                 )
             )
         )

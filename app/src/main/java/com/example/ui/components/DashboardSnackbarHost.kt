@@ -78,6 +78,10 @@ fun DashboardSnackbarEffect(
                     DashboardSnackbarRoute.DISCIPLINARY_DESK -> viewModel.openDisciplinaryDesk(true)
                     DashboardSnackbarRoute.CRISIS_COMMAND -> viewModel.openCrisisEventsScreen(true)
                     DashboardSnackbarRoute.JOB_SECURITY_LEGACY -> viewModel.openJobSecurityLegacyScreen(true)
+                    DashboardSnackbarRoute.RIVAL_WATCH -> viewModel.openRivalWatchModal(true)
+                    DashboardSnackbarRoute.STADIUM_ULTIMATUM -> viewModel.setSelectedTab(0)
+                    DashboardSnackbarRoute.FAN_SENTIMENT_PULSE -> viewModel.openFanSentimentScreen(true)
+                    DashboardSnackbarRoute.BROADCAST_WAR_ROOM -> viewModel.openBroadcastNegotiations(true)
                     null -> Unit
                 }
             }

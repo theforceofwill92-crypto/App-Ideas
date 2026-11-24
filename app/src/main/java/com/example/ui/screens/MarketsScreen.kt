@@ -28,6 +28,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.BorderStroke
+import com.example.model.ExpansionArenaTier
+import com.example.model.ExpansionRequestEngine
 import com.example.model.FranchiseIdentityEngine
 import com.example.model.MAX_OPEN_EXPANSION_CANDIDATES
 import com.example.model.MarketCity
@@ -789,7 +792,67 @@ fun MarketsScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    val cityCba = remember(
+                        city,
+                        uiState.franchises,
+                        uiState.activeBroadcast,
+                        uiState.activeSponsorship
+                    ) {
+                        ExpansionRequestEngine.analyzeMarketCostBenefit(
+                            city = city,
+                            franchises = uiState.franchises,
+                            activeBroadcast = uiState.activeBroadcast,
+                            activeSponsorship = uiState.activeSponsorship
+                        )
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, GoldPrimary.copy(alpha = 0.28f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("city_cba_strip_${city.id}")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "5Y ROI +${cityCba.fiveYearRoiPct.toInt()}% • Grade ${cityCba.cbaGrade}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = GoldPrimary
+                            )
+                            Text(
+                                text = "+\$${cityCba.projectedNetAnnualBenefitMillions}M/yr Net",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = EmeraldAccent
+                            )
+                            if (city.hasBuiltExpansionArena) {
+                                Surface(
+                                    color = EmeraldAccent.copy(alpha = 0.18f),
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = "Arena Built",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = EmeraldAccent,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     // Action Buttons (Evaluate Dossier & Award Franchise & Withdraw)
                     Row(
@@ -860,8 +923,17 @@ fun MarketsScreen(
 
     // Comprehensive City Evaluation Dossier Dialog
     if (selectedCityForDossier != null) {
-        val city = selectedCityForDossier!!
+        val city = allCities.find { it.id == selectedCityForDossier!!.id } ?: selectedCityForDossier!!
         val compCity = comparatorCity
+        val cba = remember(city, uiState.franchises, uiState.activeBroadcast, uiState.activeSponsorship) {
+            ExpansionRequestEngine.analyzeMarketCostBenefit(
+                city = city,
+                franchises = uiState.franchises,
+                activeBroadcast = uiState.activeBroadcast,
+                activeSponsorship = uiState.activeSponsorship
+            )
+        }
+        var arenaBuildFeedback by remember(city.id) { mutableStateOf<Pair<Boolean, String>?>(null) }
 
         Dialog(onDismissRequest = {
             selectedCityForDossier = null
@@ -871,6 +943,7 @@ fun MarketsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .fillMaxHeight(0.88f)
                     .padding(8.dp)
                     .border(2.dp, CyanAccent, RoundedCornerShape(20.dp))
                     .testTag("city_dossier_modal"),
@@ -879,6 +952,7 @@ fun MarketsScreen(
             ) {
                 Column(
                     modifier = Modifier
+                        .verticalScroll(rememberScrollState())
                         .padding(20.dp)
                         .fillMaxWidth()
                 ) {
@@ -887,7 +961,7 @@ fun MarketsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "EXPANSION INTELLIGENCE DOSSIER",
                                 style = MaterialTheme.typography.labelSmall,
@@ -973,6 +1047,181 @@ fun MarketsScreen(
                             ) {
                                 Text("Expansion Buy-In Fee", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text("\$${city.expansionFeeMillions}M Treasury Inflow", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = EmeraldAccent)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Cost-Benefit Analysis Card
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, GoldPrimary.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                            .testTag("dossier_cost_benefit_card")
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "COST-BENEFIT ANALYSIS",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Black,
+                                    color = GoldPrimary
+                                )
+                                Surface(
+                                    color = GoldPrimary.copy(alpha = 0.18f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = "GRADE ${cba.cbaGrade}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Black,
+                                        color = GoldPrimary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Upfront Arena Outlay", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    text = if (cba.hasConstructedArena) "Funded (\$0M left)" else "\$${cba.totalCapitalOutlayMillions}M",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (cba.hasConstructedArena) EmeraldAccent else AmberWarning
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Net Annual Benefit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    text = "+\$${cba.projectedNetAnnualBenefitMillions}M/yr",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EmeraldAccent
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Payback Window / 5-Yr ROI", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    text = "${cba.paybackYears} yrs • +${cba.fiveYearRoiPct.toInt()}% ROI",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Black,
+                                    color = CyanAccent
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = cba.recommendationNote,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (!city.hasFranchise) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, CyanAccent.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                                .testTag("card_build_expansion_arena")
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "BUILD EXPANSION ARENA",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Black,
+                                        color = CyanAccent
+                                    )
+                                    Text(
+                                        text = "Cash: \$${uiState.cashReservesMillions}M",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = GoldPrimary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = if (city.hasBuiltExpansionArena) {
+                                        "Commissioned: ${city.expansionArenaTierName.ifBlank { city.arenaName }} (${city.arenaCapacity} seats)"
+                                    } else {
+                                        "Pre-fund stadium construction to boost local sponsors, capacity, and expansion ROI."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                ExpansionArenaTier.values().forEach { tier ->
+                                    val isCurrentTier = city.hasBuiltExpansionArena && city.expansionArenaTierName == tier.displayName
+                                    OutlinedButton(
+                                        onClick = { arenaBuildFeedback = viewModel.buildExpansionArena(city.id, tier) },
+                                        enabled = !city.hasBuiltExpansionArena && uiState.cashReservesMillions >= tier.buildCostMillions,
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 2.dp)
+                                            .minimumInteractiveComponentSize()
+                                            .testTag("btn_build_arena_${tier.name}")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = if (isCurrentTier) "${tier.displayName} (Built)" else tier.displayName,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (isCurrentTier) EmeraldAccent else MaterialTheme.colorScheme.onSurface
+                                                )
+                                                Text(
+                                                    text = "${tier.capacity} seats • +\$${tier.sponsorBoostMillions}M/yr sponsors",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            Text(
+                                                text = "-\$${tier.buildCostMillions}M",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Black,
+                                                color = GoldPrimary
+                                            )
+                                        }
+                                    }
+                                }
+                                if (arenaBuildFeedback != null) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    val (ok, msg) = arenaBuildFeedback!!
+                                    Text(
+                                        text = msg,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (ok) EmeraldAccent else CrimsonAlert
+                                    )
+                                }
                             }
                         }
                     }
@@ -1261,7 +1510,50 @@ fun MarketsScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    val ratificationCba = remember(
+                        city,
+                        uiState.franchises,
+                        uiState.activeBroadcast,
+                        uiState.activeSponsorship
+                    ) {
+                        ExpansionRequestEngine.analyzeMarketCostBenefit(
+                            city = city,
+                            franchises = uiState.franchises,
+                            activeBroadcast = uiState.activeBroadcast,
+                            activeSponsorship = uiState.activeSponsorship
+                        )
+                    }
+                    Surface(
+                        color = GoldPrimary.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, GoldPrimary.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "CBA ${ratificationCba.cbaGrade} • 5Y ROI +${ratificationCba.fiveYearRoiPct.toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = GoldPrimary
+                            )
+                            Text(
+                                text = "+\$${ratificationCba.projectedNetAnnualBenefitMillions}M/yr Net • ${ratificationCba.paybackYears}y Payback",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = EmeraldAccent
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     Column(
                         modifier = Modifier.fillMaxWidth(),

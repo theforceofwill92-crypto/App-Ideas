@@ -139,6 +139,10 @@ class ExpansionRequestsTest {
         composeTestRule.onNodeWithTag("revenue_gain_${req1.id}", useUnmergedTree = true)
             .assertIsDisplayed()
             .assertTextContains("/yr", substring = true)
+        composeTestRule.onNodeWithTag("cba_summary_${req1.id}")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertTextContains("CBA", substring = true)
 
         // Approve first request via UI button
         composeTestRule.onNodeWithTag("btn_approve_request_${req1.id}")
@@ -197,5 +201,45 @@ class ExpansionRequestsTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithTag("markets_screen_content").assertIsDisplayed()
+    }
+
+    @Test
+    fun buildExpansionArenaDeductsCashUpgradesMarketAndUpdatesCostBenefitAnalysis() {
+        val context = ApplicationProvider.getApplicationContext<Context>() as Application
+        val vm = LeagueViewModel(context)
+
+        val stateBefore = vm.uiState.value
+        val targetCity = stateBefore.cities.first { !it.hasFranchise && !it.hasBuiltExpansionArena }
+        val cbaBefore = ExpansionRequestEngine.analyzeMarketCostBenefit(
+            city = targetCity,
+            franchises = stateBefore.franchises,
+            activeBroadcast = stateBefore.activeBroadcast,
+            activeSponsorship = stateBefore.activeSponsorship
+        )
+        assertFalse(cbaBefore.hasConstructedArena)
+        assertTrue(cbaBefore.upfrontArenaBuildCostMillions > 0L)
+        assertTrue(cbaBefore.projectedNetAnnualBenefitMillions > 0L)
+
+        val tier = com.example.model.ExpansionArenaTier.PREMIER_ARENA
+        val cashBefore = stateBefore.cashReservesMillions
+        val (built, _) = vm.buildExpansionArena(targetCity.id, tier)
+        assertTrue(built)
+
+        val stateAfter = vm.uiState.value
+        val updatedCity = stateAfter.cities.first { it.id == targetCity.id }
+        assertEquals(cashBefore - tier.buildCostMillions, stateAfter.cashReservesMillions)
+        assertTrue(updatedCity.hasBuiltExpansionArena)
+        assertEquals(tier.capacity, updatedCity.arenaCapacity)
+        assertEquals(targetCity.localSponsorDepthMillions + tier.sponsorBoostMillions, updatedCity.localSponsorDepthMillions)
+
+        val cbaAfter = ExpansionRequestEngine.analyzeMarketCostBenefit(
+            city = updatedCity,
+            franchises = stateAfter.franchises,
+            activeBroadcast = stateAfter.activeBroadcast,
+            activeSponsorship = stateAfter.activeSponsorship
+        )
+        assertTrue(cbaAfter.hasConstructedArena)
+        assertEquals(0L, cbaAfter.totalCapitalOutlayMillions)
+        assertTrue(cbaAfter.projectedNetAnnualBenefitMillions >= cbaBefore.projectedNetAnnualBenefitMillions)
     }
 }

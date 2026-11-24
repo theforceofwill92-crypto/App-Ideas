@@ -968,7 +968,9 @@ object InitialLeagueData {
             ticketPrice = 90,
             annualPayrollMillions = 78L,
             localSponsorRevenueMillions = 42L,
-            fanLoyalty = 78
+            fanLoyalty = 78,
+            stadiumAge = 22,
+            stadiumCondition = 64
         ),
         Franchise(
             id = "team_la",
@@ -993,7 +995,9 @@ object InitialLeagueData {
             ticketPrice = 85,
             annualPayrollMillions = 82L,
             localSponsorRevenueMillions = 38L,
-            fanLoyalty = 80
+            fanLoyalty = 80,
+            stadiumAge = 11,
+            stadiumCondition = 86
         ),
         Franchise(
             id = "team_chicago",
@@ -1018,7 +1022,9 @@ object InitialLeagueData {
             ticketPrice = 65,
             annualPayrollMillions = 66L,
             localSponsorRevenueMillions = 30L,
-            fanLoyalty = 84
+            fanLoyalty = 84,
+            stadiumAge = 25,
+            stadiumCondition = 51
         ),
         Franchise(
             id = "team_austin",
@@ -1043,7 +1049,9 @@ object InitialLeagueData {
             ticketPrice = 75,
             annualPayrollMillions = 74L,
             localSponsorRevenueMillions = 35L,
-            fanLoyalty = 82
+            fanLoyalty = 82,
+            stadiumAge = 8,
+            stadiumCondition = 91
         ),
         Franchise(
             id = "team_vegas",
@@ -1068,7 +1076,9 @@ object InitialLeagueData {
             ticketPrice = 80,
             annualPayrollMillions = 70L,
             localSponsorRevenueMillions = 34L,
-            fanLoyalty = 74
+            fanLoyalty = 74,
+            stadiumAge = 16,
+            stadiumCondition = 73
         ),
         Franchise(
             id = "team_seattle",
@@ -1093,7 +1103,9 @@ object InitialLeagueData {
             ticketPrice = 70,
             annualPayrollMillions = 76L,
             localSponsorRevenueMillions = 36L,
-            fanLoyalty = 85
+            fanLoyalty = 85,
+            stadiumAge = 24,
+            stadiumCondition = 54
         )
     ).map { f ->
         f.copy(

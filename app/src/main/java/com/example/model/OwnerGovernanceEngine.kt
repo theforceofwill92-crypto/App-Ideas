@@ -351,7 +351,30 @@ object OwnerGovernanceEngine {
                         (if (proposedAgreement.fiveStarHotelSingleRooms) 4 else 0)
             }
 
-            // 5. Franchise financial context modifier (small-market vs big spender)
+            // 5. Roster Rules preference by archetype
+            score += when (proposedAgreement.negotiatedRosterRule) {
+                RosterSizeRule.COMPACT_12 -> when (arch) {
+                    OwnerArchetype.FISCAL_HAWK -> 8
+                    OwnerArchetype.TRADITIONALIST_PURIST -> 6
+                    OwnerArchetype.COMMUNITY_STEWARD -> 4
+                    OwnerArchetype.ANALYTICS_VISIONARY -> -4
+                    OwnerArchetype.GLOBAL_EXPANSIONIST -> -6
+                    OwnerArchetype.PLAYERS_FIRST_PATRON -> -10
+                    OwnerArchetype.BROADCAST_SHOWMAN -> 0
+                }
+                RosterSizeRule.STANDARD_15 -> 4
+                RosterSizeRule.EXPANDED_18 -> when (arch) {
+                    OwnerArchetype.PLAYERS_FIRST_PATRON -> 10
+                    OwnerArchetype.GLOBAL_EXPANSIONIST -> 8
+                    OwnerArchetype.ANALYTICS_VISIONARY -> 6
+                    OwnerArchetype.BROADCAST_SHOWMAN -> 4
+                    OwnerArchetype.TRADITIONALIST_PURIST -> -4
+                    OwnerArchetype.COMMUNITY_STEWARD -> -2
+                    OwnerArchetype.FISCAL_HAWK -> -10
+                }
+            }
+
+            // 6. Franchise financial context modifier (small-market vs big spender)
             if (franchise.annualPayrollMillions > avgPayroll + 4 && proposedAgreement.salaryCapType == SalaryCapType.FREE_MARKET) {
                 score += 10
             } else if (franchise.fanBaseMillions < 2.5 && proposedAgreement.salaryCapType == SalaryCapType.FREE_MARKET) {
@@ -382,7 +405,7 @@ object OwnerGovernanceEngine {
         return BoardVoteResult(
             id = "vote_cba_${year}_${week}_${System.currentTimeMillis() % 10000}",
             proposalTitle = "5-Year Collective Bargaining Agreement",
-            proposalSummary = "${proposedAgreement.playerRevenueSharePct}% Player Split • ${proposedAgreement.salaryCapType.displayName} (\$${proposedAgreement.salaryCapMillions}M)",
+            proposalSummary = "${proposedAgreement.playerRevenueSharePct}% Player Split • ${proposedAgreement.salaryCapType.displayName} (\$${proposedAgreement.salaryCapMillions}M) • ${proposedAgreement.negotiatedRosterRule.displayName}",
             category = GovernanceProposalCategory.CBA_NEGOTIATION,
             ballots = ballots,
             yesVotes = yes,

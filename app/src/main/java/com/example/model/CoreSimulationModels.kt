@@ -6,7 +6,8 @@ enum class LaborTriggerType(val label: String) {
     STRIKE_THREAT_CRITICAL("Critical Strike Threat"),
     WORK_STOPPAGE_ALERT("Imminent Work Stoppage"),
     REVENUE_SHARE_DISPUTE("Revenue Share Dispute"),
-    TRAVEL_SAFETY_GRIEVANCE("Travel & Safety Grievance")
+    TRAVEL_SAFETY_GRIEVANCE("Travel & Safety Grievance"),
+    LOCKOUT_ACTIVE("Owner Lockout Active — Games Suspended")
 }
 
 enum class LaborTriggerSeverity(val label: String) {
@@ -89,7 +90,12 @@ data class LaborNegotiationChoice(
     val projectedCbaYearsSet: Int? = null,
     val enactsCharterFlights: Boolean = false,
     val enactsBackToBackLimit: Boolean = false,
-    val opensCbaTableAfter: Boolean = false
+    val opensCbaTableAfter: Boolean = false,
+    val requestedSalaryCapMillions: Long? = null,
+    val requestedSalaryCapType: SalaryCapType? = null,
+    val requestedRosterSizeRule: RosterSizeRule? = null,
+    val clearsLockout: Boolean = false,
+    val activatesLockoutOnReject: Boolean = false
 )
 
 data class LaborNegotiationOverlaySession(
@@ -118,7 +124,10 @@ data class DashboardTrendPoint(
     val fanSentimentPct: Int,
     val avgMoralePct: Int,
     val avgLoyaltyPct: Int,
-    val totalFanbaseMillions: Double
+    val totalFanbaseMillions: Double,
+    val leagueRevenueMillions: Long = 0L,
+    val tvBroadcastRating: Double = 4.2,
+    val playerSatisfactionPct: Int = 78
 )
 
 data class CoreSimulationState(
@@ -161,7 +170,11 @@ enum class DashboardSnackbarRoute {
     RULE_COMMITTEE,
     DISCIPLINARY_DESK,
     CRISIS_COMMAND,
-    JOB_SECURITY_LEGACY
+    JOB_SECURITY_LEGACY,
+    RIVAL_WATCH,
+    STADIUM_ULTIMATUM,
+    FAN_SENTIMENT_PULSE,
+    BROADCAST_WAR_ROOM
 }
 
 data class DashboardSnackbarEvent(

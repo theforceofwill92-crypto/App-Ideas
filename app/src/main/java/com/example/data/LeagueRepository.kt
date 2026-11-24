@@ -1081,6 +1081,8 @@ class LeagueRepository(context: Context) {
                 put("fanBaseMillions", f.fanBaseMillions)
                 put("fanMorale", f.fanMorale)
                 put("stadiumCapacity", f.stadiumCapacity)
+                put("stadiumAge", f.stadiumAge)
+                put("stadiumCondition", f.stadiumCondition)
                 put("ticketPrice", f.ticketPrice)
                 put("annualPayrollMillions", f.annualPayrollMillions)
                 put("localSponsorRevenueMillions", f.localSponsorRevenueMillions)
@@ -1289,6 +1291,8 @@ class LeagueRepository(context: Context) {
                     fanBaseMillions = obj.getDouble("fanBaseMillions"),
                     fanMorale = obj.getInt("fanMorale"),
                     stadiumCapacity = obj.getInt("stadiumCapacity"),
+                    stadiumAge = obj.optInt("stadiumAge", 14).coerceAtLeast(0),
+                    stadiumCondition = obj.optInt("stadiumCondition", 78).coerceIn(0, 100),
                     ticketPrice = obj.getInt("ticketPrice"),
                     annualPayrollMillions = obj.getLong("annualPayrollMillions"),
                     localSponsorRevenueMillions = obj.getLong("localSponsorRevenueMillions"),
@@ -1386,8 +1390,16 @@ class LeagueRepository(context: Context) {
                 put("isInternational", c.isInternational)
                 put("hasFranchise", c.hasFranchise)
                 put("expansionFeeMillions", c.expansionFeeMillions)
+                put("digitalStreamingIndex", c.digitalStreamingIndex)
+                put("localSponsorDepthMillions", c.localSponsorDepthMillions)
+                put("arenaName", c.arenaName)
+                put("arenaCapacity", c.arenaCapacity)
+                put("competingMajorTeamsCount", c.competingMajorTeamsCount)
                 put("arenaReadinessStatus", c.arenaReadinessStatus)
                 put("investorGroupProfile", c.investorGroupProfile)
+                put("hasBuiltExpansionArena", c.hasBuiltExpansionArena)
+                put("arenaBuildCostSpentMillions", c.arenaBuildCostSpentMillions)
+                put("expansionArenaTierName", c.expansionArenaTierName)
             }
             array.put(obj)
         }
@@ -1414,8 +1426,16 @@ class LeagueRepository(context: Context) {
                     isInternational = obj.getBoolean("isInternational"),
                     hasFranchise = obj.getBoolean("hasFranchise"),
                     expansionFeeMillions = obj.getLong("expansionFeeMillions"),
+                    digitalStreamingIndex = obj.optInt("digitalStreamingIndex", 86),
+                    localSponsorDepthMillions = obj.optLong("localSponsorDepthMillions", 38L),
+                    arenaName = obj.optString("arenaName", "Metropolitan Arena"),
+                    arenaCapacity = obj.optInt("arenaCapacity", 21000),
+                    competingMajorTeamsCount = obj.optInt("competingMajorTeamsCount", 2),
                     arenaReadinessStatus = obj.optString("arenaReadinessStatus", "Turnkey Modern Arena"),
-                    investorGroupProfile = obj.optString("investorGroupProfile", "Regional Investment Consortium")
+                    investorGroupProfile = obj.optString("investorGroupProfile", "Regional Investment Consortium"),
+                    hasBuiltExpansionArena = obj.optBoolean("hasBuiltExpansionArena", false),
+                    arenaBuildCostSpentMillions = obj.optLong("arenaBuildCostSpentMillions", 0L),
+                    expansionArenaTierName = obj.optString("expansionArenaTierName", "")
                 )
             )
         }
@@ -2344,4 +2364,671 @@ class LeagueRepository(context: Context) {
             null
         }
     }
+
+    fun saveRivalLeague(rivalLeague: RivalLeague) {
+        val root = JSONObject().apply {
+            put("isActive", rivalLeague.isActive)
+            put("name", rivalLeague.name)
+            put("capital", rivalLeague.capital)
+            put("hype", rivalLeague.hype)
+            put("poachedPlayersJson", serializeFreeAgents(rivalLeague.poachedPlayers))
+            put("sportType", rivalLeague.sportType.name)
+            put("blacklistedPlayerIds", JSONArray(rivalLeague.blacklistedPlayerIds.toList()))
+            put("lastPoachedSeasonYear", rivalLeague.lastPoachedSeasonYear)
+            put("totalPoachesCount", rivalLeague.totalPoachesCount)
+            put("mergerAttemptsCount", rivalLeague.mergerAttemptsCount)
+            put("seasonsSurvived", rivalLeague.seasonsSurvived)
+            put("highHypeSeasonsCount", rivalLeague.highHypeSeasonsCount)
+            put("permanentTvRevenueBoostMillions", rivalLeague.permanentTvRevenueBoostMillions)
+            put("hasResolvedAbsorptionEvent", rivalLeague.hasResolvedAbsorptionEvent)
+            put("absorbedTeamNames", JSONArray(rivalLeague.absorbedTeamNames))
+            rivalLeague.activeAbsorptionNegotiation?.let { ev ->
+                val candArr = JSONArray()
+                ev.candidateTeams.forEach { c ->
+                    candArr.put(JSONObject().apply {
+                        put("id", c.id)
+                        put("cityId", c.cityId)
+                        put("cityName", c.cityName)
+                        put("nickname", c.nickname)
+                        put("colorHex", c.colorHex)
+                        put("secondaryColorHex", c.secondaryColorHex)
+                        put("rosterRating", c.rosterRating)
+                        put("fanBaseMillions", c.fanBaseMillions)
+                        put("marketPopulationMillions", c.marketPopulationMillions)
+                        put("stadiumCapacity", c.stadiumCapacity)
+                        put("arenaName", c.arenaName)
+                        put("localSponsorRevenueMillions", c.localSponsorRevenueMillions)
+                        put("annualBroadcastContributionMillions", c.annualBroadcastContributionMillions)
+                        put("signatureStarName", c.signatureStarName)
+                        put("isSelected", c.isSelected)
+                    })
+                }
+                put("activeAbsorptionNegotiation", JSONObject().apply {
+                    put("id", ev.id)
+                    put("rivalLeagueName", ev.rivalLeagueName)
+                    put("sportType", ev.sportType.name)
+                    put("seasonYear", ev.seasonYear)
+                    put("seasonsSurvived", ev.seasonsSurvived)
+                    put("rivalHypeSnapshot", ev.rivalHypeSnapshot)
+                    put("rivalCapitalSnapshot", ev.rivalCapitalSnapshot)
+                    put("baseTvBoostMillions", ev.baseTvBoostMillions)
+                    put("ownerApprovalHitPerTeam", ev.ownerApprovalHitPerTeam)
+                    put("headline", ev.headline)
+                    put("description", ev.description)
+                    put("candidateTeams", candArr)
+                })
+            }
+            put("lastOffseasonPoachSummary", rivalLeague.lastOffseasonPoachSummary)
+            put("lastActionFeedback", rivalLeague.lastActionFeedback)
+            put("historyLog", JSONArray(rivalLeague.historyLog.take(16)))
+        }
+        settingsPrefs.edit().putString("rival_league_state_json", root.toString()).apply()
+    }
+
+    fun loadRivalLeague(): RivalLeague? {
+        val raw = settingsPrefs.getString("rival_league_state_json", null) ?: return null
+        return try {
+            val root = JSONObject(raw)
+            val sport = runCatching { SportType.valueOf(root.optString("sportType")) }
+                .getOrDefault(SportType.BASKETBALL)
+            val poachedJson = root.optString("poachedPlayersJson", "[]")
+            val poachedPlayers = deserializeFreeAgents(poachedJson)
+            val blacklistArr = root.optJSONArray("blacklistedPlayerIds") ?: JSONArray()
+            val blacklisted = (0 until blacklistArr.length()).mapNotNull { i ->
+                blacklistArr.optString(i).takeIf { it.isNotBlank() }
+            }.toSet()
+            val histArr = root.optJSONArray("historyLog") ?: JSONArray()
+            val historyLog = (0 until histArr.length()).mapNotNull { i ->
+                histArr.optString(i).takeIf { it.isNotBlank() }
+            }
+            val absorbedArr = root.optJSONArray("absorbedTeamNames") ?: JSONArray()
+            val absorbedTeamNames = (0 until absorbedArr.length()).mapNotNull { i ->
+                absorbedArr.optString(i).takeIf { it.isNotBlank() }
+            }
+            val negotiationObj = root.optJSONObject("activeAbsorptionNegotiation")
+            val activeNegotiation = negotiationObj?.let { evObj ->
+                val evSport = runCatching { SportType.valueOf(evObj.optString("sportType")) }
+                    .getOrDefault(sport)
+                val candArr = evObj.optJSONArray("candidateTeams") ?: JSONArray()
+                val candidates = (0 until candArr.length()).mapNotNull { i ->
+                    val c = candArr.optJSONObject(i) ?: return@mapNotNull null
+                    RivalFranchiseCandidate(
+                        id = c.optString("id"),
+                        cityId = c.optString("cityId"),
+                        cityName = c.optString("cityName"),
+                        nickname = c.optString("nickname"),
+                        colorHex = c.optLong("colorHex", 0xFFD97706L),
+                        secondaryColorHex = c.optLong("secondaryColorHex", 0xFF1E293BL),
+                        rosterRating = c.optInt("rosterRating", 82),
+                        fanBaseMillions = c.optDouble("fanBaseMillions", 1.1),
+                        marketPopulationMillions = c.optDouble("marketPopulationMillions", 2.4),
+                        stadiumCapacity = c.optInt("stadiumCapacity", 20000),
+                        arenaName = c.optString("arenaName", "Civic Pavilion"),
+                        localSponsorRevenueMillions = c.optLong("localSponsorRevenueMillions", 18L),
+                        annualBroadcastContributionMillions = c.optLong("annualBroadcastContributionMillions", 14L),
+                        signatureStarName = c.optString("signatureStarName", "Franchise Ace"),
+                        isSelected = c.optBoolean("isSelected", true)
+                    )
+                }
+                if (candidates.isEmpty()) null else RivalAbsorptionNegotiationEvent(
+                    id = evObj.optString("id"),
+                    rivalLeagueName = evObj.optString("rivalLeagueName", RivalLeagueEngine.defaultNameForSport(evSport)),
+                    sportType = evSport,
+                    seasonYear = evObj.optInt("seasonYear", 2028),
+                    seasonsSurvived = evObj.optInt("seasonsSurvived", 3),
+                    rivalHypeSnapshot = evObj.optInt("rivalHypeSnapshot", 74),
+                    rivalCapitalSnapshot = evObj.optLong("rivalCapitalSnapshot", 85L),
+                    candidateTeams = candidates,
+                    baseTvBoostMillions = evObj.optLong("baseTvBoostMillions", 26L),
+                    ownerApprovalHitPerTeam = evObj.optInt("ownerApprovalHitPerTeam", 5),
+                    headline = evObj.optString("headline"),
+                    description = evObj.optString("description")
+                )
+            }
+            RivalLeague(
+                isActive = root.optBoolean("isActive", true),
+                name = root.optString("name", RivalLeagueEngine.defaultNameForSport(sport)),
+                capital = root.optLong("capital", 120L).coerceAtLeast(0L),
+                hype = root.optInt("hype", 58).coerceIn(0, 100),
+                poachedPlayers = poachedPlayers,
+                sportType = sport,
+                blacklistedPlayerIds = blacklisted,
+                lastPoachedSeasonYear = root.optInt("lastPoachedSeasonYear", 0),
+                totalPoachesCount = root.optInt("totalPoachesCount", poachedPlayers.size),
+                mergerAttemptsCount = root.optInt("mergerAttemptsCount", 0),
+                seasonsSurvived = root.optInt("seasonsSurvived", 0).coerceAtLeast(0),
+                highHypeSeasonsCount = root.optInt("highHypeSeasonsCount", 0).coerceAtLeast(0),
+                permanentTvRevenueBoostMillions = root.optLong("permanentTvRevenueBoostMillions", 0L).coerceAtLeast(0L),
+                hasResolvedAbsorptionEvent = root.optBoolean("hasResolvedAbsorptionEvent", false),
+                absorbedTeamNames = absorbedTeamNames,
+                activeAbsorptionNegotiation = activeNegotiation,
+                lastOffseasonPoachSummary = root.optString("lastOffseasonPoachSummary", ""),
+                lastActionFeedback = root.optString("lastActionFeedback", ""),
+                historyLog = historyLog
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveStadiumDealState(state: StadiumDealState) {
+        val root = JSONObject().apply {
+            put("lastTickedSeasonYear", state.lastTickedSeasonYear)
+            put("lastDecisionSummary", state.lastDecisionSummary)
+            put("historyLog", JSONArray(state.historyLog.take(20)))
+            state.activeUltimatum?.let { u ->
+                put("activeUltimatum", ultimatumToJson(u))
+            }
+            val queueArr = JSONArray()
+            state.pendingUltimatumQueue.forEach { queueArr.put(ultimatumToJson(it)) }
+            put("pendingUltimatumQueue", queueArr)
+            state.activeRelocationVote?.let { v ->
+                put("activeRelocationVote", JSONObject().apply {
+                    put("id", v.id)
+                    put("ultimatumId", v.ultimatumId)
+                    put("franchiseId", v.franchiseId)
+                    put("franchiseName", v.franchiseName)
+                    put("currentCityId", v.currentCityId)
+                    put("currentCityName", v.currentCityName)
+                    put("ownerName", v.ownerName)
+                    put("ownershipGroupName", v.ownershipGroupName)
+                    put("franchiseColorHex", v.franchiseColorHex)
+                    put("seasonYear", v.seasonYear)
+                    put("stadiumAge", v.stadiumAge)
+                    put("stadiumCondition", v.stadiumCondition)
+                    put("selectedCityId", v.selectedCityId)
+                    val dealsArr = JSONArray()
+                    v.cityDeals.forEach { d ->
+                        dealsArr.put(JSONObject().apply {
+                            put("cityId", d.cityId)
+                            put("cityName", d.cityName)
+                            put("region", d.region)
+                            put("isInternational", d.isInternational)
+                            put("populationMillions", d.populationMillions)
+                            put("arenaName", d.arenaName)
+                            put("newStadiumCapacity", d.newStadiumCapacity)
+                            put("publicContributionPct", d.publicContributionPct)
+                            put("newFacilityValueMillions", d.newFacilityValueMillions)
+                            put("relocationFeeMillions", d.relocationFeeMillions)
+                            put("projectedSponsorRevenueMillions", d.projectedSponsorRevenueMillions)
+                            put("projectedFanBaseMillions", d.projectedFanBaseMillions)
+                            put("dealPitch", d.dealPitch)
+                        })
+                    }
+                    put("cityDeals", dealsArr)
+                })
+            }
+        }
+        settingsPrefs.edit().putString("stadium_deal_state_json", root.toString()).apply()
+    }
+
+    fun loadStadiumDealState(): StadiumDealState? {
+        val raw = settingsPrefs.getString("stadium_deal_state_json", null) ?: return null
+        return try {
+            val root = JSONObject(raw)
+            val activeUlt = root.optJSONObject("activeUltimatum")?.let { jsonToUltimatum(it) }
+            val qArr = root.optJSONArray("pendingUltimatumQueue") ?: JSONArray()
+            val queue = (0 until qArr.length()).mapNotNull { i ->
+                qArr.optJSONObject(i)?.let { jsonToUltimatum(it) }
+            }
+            val voteObj = root.optJSONObject("activeRelocationVote")?.let { v ->
+                val dArr = v.optJSONArray("cityDeals") ?: JSONArray()
+                val deals = (0 until dArr.length()).mapNotNull { i ->
+                    val d = dArr.optJSONObject(i) ?: return@mapNotNull null
+                    RelocationDealOffer(
+                        cityId = d.optString("cityId"),
+                        cityName = d.optString("cityName"),
+                        region = d.optString("region"),
+                        isInternational = d.optBoolean("isInternational", false),
+                        populationMillions = d.optDouble("populationMillions", 2.0),
+                        arenaName = d.optString("arenaName", "Municipal Arena"),
+                        newStadiumCapacity = d.optInt("newStadiumCapacity", 21000),
+                        publicContributionPct = d.optInt("publicContributionPct", 75),
+                        newFacilityValueMillions = d.optLong("newFacilityValueMillions", 420L),
+                        relocationFeeMillions = d.optLong("relocationFeeMillions", 15L),
+                        projectedSponsorRevenueMillions = d.optLong("projectedSponsorRevenueMillions", 32L),
+                        projectedFanBaseMillions = d.optDouble("projectedFanBaseMillions", 2.0),
+                        dealPitch = d.optString("dealPitch", "")
+                    )
+                }
+                RelocationVoteState(
+                    id = v.optString("id"),
+                    ultimatumId = v.optString("ultimatumId"),
+                    franchiseId = v.optString("franchiseId"),
+                    franchiseName = v.optString("franchiseName"),
+                    currentCityId = v.optString("currentCityId"),
+                    currentCityName = v.optString("currentCityName"),
+                    ownerName = v.optString("ownerName"),
+                    ownershipGroupName = v.optString("ownershipGroupName"),
+                    franchiseColorHex = v.optLong("franchiseColorHex", 0xFFF59E0BL),
+                    seasonYear = v.optInt("seasonYear", 2026),
+                    stadiumAge = v.optInt("stadiumAge", 26),
+                    stadiumCondition = v.optInt("stadiumCondition", 46),
+                    cityDeals = deals,
+                    selectedCityId = v.optString("selectedCityId", deals.firstOrNull()?.cityId ?: "")
+                )
+            }
+            val histArr = root.optJSONArray("historyLog") ?: JSONArray()
+            val hist = (0 until histArr.length()).mapNotNull { i -> histArr.optString(i).takeIf { it.isNotBlank() } }
+            StadiumDealState(
+                activeUltimatum = activeUlt,
+                pendingUltimatumQueue = queue,
+                activeRelocationVote = voteObj,
+                lastTickedSeasonYear = root.optInt("lastTickedSeasonYear", 0),
+                lastDecisionSummary = root.optString("lastDecisionSummary", "Monitoring municipal arena leases and stadium conditions across all franchises."),
+                historyLog = hist
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun ultimatumToJson(u: StadiumUltimatumEvent): JSONObject = JSONObject().apply {
+        put("id", u.id)
+        put("franchiseId", u.franchiseId)
+        put("franchiseName", u.franchiseName)
+        put("cityName", u.cityName)
+        put("ownerName", u.ownerName)
+        put("ownershipGroupName", u.ownershipGroupName)
+        put("franchiseColorHex", u.franchiseColorHex)
+        put("stadiumAge", u.stadiumAge)
+        put("stadiumCondition", u.stadiumCondition)
+        put("stadiumCapacity", u.stadiumCapacity)
+        put("seasonYear", u.seasonYear)
+        put("subsidyCostMillions", u.subsidyCostMillions)
+        put("headline", u.headline)
+        put("description", u.description)
+    }
+
+    private fun jsonToUltimatum(o: JSONObject): StadiumUltimatumEvent = StadiumUltimatumEvent(
+        id = o.optString("id"),
+        franchiseId = o.optString("franchiseId"),
+        franchiseName = o.optString("franchiseName"),
+        cityName = o.optString("cityName"),
+        ownerName = o.optString("ownerName"),
+        ownershipGroupName = o.optString("ownershipGroupName"),
+        franchiseColorHex = o.optLong("franchiseColorHex", 0xFFF59E0BL),
+        stadiumAge = o.optInt("stadiumAge", 26),
+        stadiumCondition = o.optInt("stadiumCondition", 46),
+        stadiumCapacity = o.optInt("stadiumCapacity", 20000),
+        seasonYear = o.optInt("seasonYear", 2026),
+        subsidyCostMillions = o.optLong("subsidyCostMillions", 28L),
+        headline = o.optString("headline"),
+        description = o.optString("description")
+    )
+
+    fun saveFanSentimentState(state: FanSentimentState) {
+        val root = JSONObject().apply {
+            put("casualSentimentScore", state.casualSentimentScore)
+            put("dieHardSentimentScore", state.dieHardSentimentScore)
+            put("lastCasualDelta", state.lastCasualDelta)
+            put("lastDieHardDelta", state.lastDieHardDelta)
+            put("lastPulseNote", state.lastPulseNote)
+
+            val socialArr = JSONArray()
+            state.socialFeed.take(30).forEach { post ->
+                socialArr.put(JSONObject().apply {
+                    put("id", post.id)
+                    put("handle", post.handle)
+                    put("displayName", post.displayName)
+                    put("segment", post.segment.name)
+                    put("tone", post.tone.name)
+                    put("body", post.body)
+                    put("hashtags", JSONArray(post.hashtags))
+                    put("likesCount", post.likesCount)
+                    put("repostsCount", post.repostsCount)
+                    put("timestampLabel", post.timestampLabel)
+                    put("category", post.category.name)
+                    put("sentimentDelta", post.sentimentDelta)
+                })
+            }
+            put("socialFeed", socialArr)
+
+            val radioArr = JSONArray()
+            state.radioSegments.take(16).forEach { seg ->
+                radioArr.put(JSONObject().apply {
+                    put("id", seg.id)
+                    put("showName", seg.showName)
+                    put("hostNames", seg.hostNames)
+                    put("callerName", seg.callerName)
+                    put("callerCity", seg.callerCity)
+                    put("callerSegment", seg.callerSegment.name)
+                    put("segmentTitle", seg.segmentTitle)
+                    put("hostTake", seg.hostTake)
+                    put("callerQuote", seg.callerQuote)
+                    put("casualApprovalPct", seg.casualApprovalPct)
+                    put("dieHardApprovalPct", seg.dieHardApprovalPct)
+                    put("heatednessScore", seg.heatednessScore)
+                    put("tone", seg.tone.name)
+                    put("timestampLabel", seg.timestampLabel)
+                    put("category", seg.category.name)
+                })
+            }
+            put("radioSegments", radioArr)
+
+            val paperArr = JSONArray()
+            state.newspaperHeadlines.take(16).forEach { item ->
+                paperArr.put(JSONObject().apply {
+                    put("id", item.id)
+                    put("publicationName", item.publicationName)
+                    put("sectionKicker", item.sectionKicker)
+                    put("headline", item.headline)
+                    put("subheadline", item.subheadline)
+                    put("byline", item.byline)
+                    put("leadParagraph", item.leadParagraph)
+                    put("tone", item.tone.name)
+                    put("timestampLabel", item.timestampLabel)
+                    put("category", item.category.name)
+                    put("relatedEntity", item.relatedEntity ?: "")
+                })
+            }
+            put("newspaperHeadlines", paperArr)
+
+            val recArr = JSONArray()
+            state.decisionReactions.take(24).forEach { rec ->
+                recArr.put(JSONObject().apply {
+                    put("id", rec.id)
+                    put("category", rec.category.name)
+                    put("decisionTitle", rec.decisionTitle)
+                    put("summary", rec.summary)
+                    put("casualDelta", rec.casualDelta)
+                    put("dieHardDelta", rec.dieHardDelta)
+                    put("casualScoreAfter", rec.casualScoreAfter)
+                    put("dieHardScoreAfter", rec.dieHardScoreAfter)
+                    put("timestampLabel", rec.timestampLabel)
+                })
+            }
+            put("decisionReactions", recArr)
+        }
+        settingsPrefs.edit().putString("fan_sentiment_state_json", root.toString()).apply()
+    }
+
+    fun loadFanSentimentState(): FanSentimentState? {
+        val raw = settingsPrefs.getString("fan_sentiment_state_json", null) ?: return null
+        return try {
+            val root = JSONObject(raw)
+            val socialArr = root.optJSONArray("socialFeed") ?: JSONArray()
+            val socialFeed = (0 until socialArr.length()).mapNotNull { i ->
+                val o = socialArr.optJSONObject(i) ?: return@mapNotNull null
+                val hashArr = o.optJSONArray("hashtags") ?: JSONArray()
+                val hashtags = (0 until hashArr.length()).mapNotNull { j ->
+                    hashArr.optString(j).takeIf { it.isNotBlank() }
+                }
+                SocialMediaPostItem(
+                    id = o.optString("id"),
+                    handle = o.optString("handle", "@LeagueFan"),
+                    displayName = o.optString("displayName", "Fan"),
+                    segment = runCatching { FanSegmentType.valueOf(o.optString("segment")) }.getOrDefault(FanSegmentType.CASUAL),
+                    tone = runCatching { MediaReactionTone.valueOf(o.optString("tone")) }.getOrDefault(MediaReactionTone.ANALYTICAL),
+                    body = o.optString("body"),
+                    hashtags = hashtags,
+                    likesCount = o.optInt("likesCount", 100),
+                    repostsCount = o.optInt("repostsCount", 25),
+                    timestampLabel = o.optString("timestampLabel", "S2026 • W1"),
+                    category = runCatching { FanDecisionCategory.valueOf(o.optString("category")) }.getOrDefault(FanDecisionCategory.WEEKLY_SIM),
+                    sentimentDelta = o.optInt("sentimentDelta", 0)
+                )
+            }
+            val radioArr = root.optJSONArray("radioSegments") ?: JSONArray()
+            val radioSegments = (0 until radioArr.length()).mapNotNull { i ->
+                val o = radioArr.optJSONObject(i) ?: return@mapNotNull null
+                SportsTalkRadioSegment(
+                    id = o.optString("id"),
+                    showName = o.optString("showName", "Sports Talk 104.3 FM"),
+                    hostNames = o.optString("hostNames", "Marcus & Coach Ray"),
+                    callerName = o.optString("callerName", "Caller"),
+                    callerCity = o.optString("callerCity", "Metro"),
+                    callerSegment = runCatching { FanSegmentType.valueOf(o.optString("callerSegment")) }.getOrDefault(FanSegmentType.DIE_HARD),
+                    segmentTitle = o.optString("segmentTitle"),
+                    hostTake = o.optString("hostTake"),
+                    callerQuote = o.optString("callerQuote"),
+                    casualApprovalPct = o.optInt("casualApprovalPct", 74),
+                    dieHardApprovalPct = o.optInt("dieHardApprovalPct", 76),
+                    heatednessScore = o.optInt("heatednessScore", 50),
+                    tone = runCatching { MediaReactionTone.valueOf(o.optString("tone")) }.getOrDefault(MediaReactionTone.DEBATE),
+                    timestampLabel = o.optString("timestampLabel", "S2026 • W1"),
+                    category = runCatching { FanDecisionCategory.valueOf(o.optString("category")) }.getOrDefault(FanDecisionCategory.WEEKLY_SIM)
+                )
+            }
+            val paperArr = root.optJSONArray("newspaperHeadlines") ?: JSONArray()
+            val newspaperHeadlines = (0 until paperArr.length()).mapNotNull { i ->
+                val o = paperArr.optJSONObject(i) ?: return@mapNotNull null
+                NewspaperHeadlineItem(
+                    id = o.optString("id"),
+                    publicationName = o.optString("publicationName", "THE NATIONAL SPORTS CHRONICLE"),
+                    sectionKicker = o.optString("sectionKicker", "FRONT PAGE"),
+                    headline = o.optString("headline"),
+                    subheadline = o.optString("subheadline"),
+                    byline = o.optString("byline"),
+                    leadParagraph = o.optString("leadParagraph"),
+                    tone = runCatching { MediaReactionTone.valueOf(o.optString("tone")) }.getOrDefault(MediaReactionTone.ANALYTICAL),
+                    timestampLabel = o.optString("timestampLabel", "S2026 • W1"),
+                    category = runCatching { FanDecisionCategory.valueOf(o.optString("category")) }.getOrDefault(FanDecisionCategory.WEEKLY_SIM),
+                    relatedEntity = o.optString("relatedEntity").takeIf { it.isNotBlank() }
+                )
+            }
+            val recArr = root.optJSONArray("decisionReactions") ?: JSONArray()
+            val decisionReactions = (0 until recArr.length()).mapNotNull { i ->
+                val o = recArr.optJSONObject(i) ?: return@mapNotNull null
+                FanDecisionReactionRecord(
+                    id = o.optString("id"),
+                    category = runCatching { FanDecisionCategory.valueOf(o.optString("category")) }.getOrDefault(FanDecisionCategory.WEEKLY_SIM),
+                    decisionTitle = o.optString("decisionTitle"),
+                    summary = o.optString("summary"),
+                    casualDelta = o.optInt("casualDelta", 0),
+                    dieHardDelta = o.optInt("dieHardDelta", 0),
+                    casualScoreAfter = o.optInt("casualScoreAfter", 74),
+                    dieHardScoreAfter = o.optInt("dieHardScoreAfter", 76),
+                    timestampLabel = o.optString("timestampLabel", "S2026 • W1")
+                )
+            }
+
+            FanSentimentState(
+                casualSentimentScore = root.optInt("casualSentimentScore", 74).coerceIn(10, 100),
+                dieHardSentimentScore = root.optInt("dieHardSentimentScore", 76).coerceIn(10, 100),
+                lastCasualDelta = root.optInt("lastCasualDelta", 0),
+                lastDieHardDelta = root.optInt("lastDieHardDelta", 0),
+                socialFeed = socialFeed,
+                radioSegments = radioSegments,
+                newspaperHeadlines = newspaperHeadlines,
+                decisionReactions = decisionReactions,
+                lastPulseNote = root.optString("lastPulseNote", "Fan sentiment restored.")
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveDashboardTrends(trends: List<DashboardTrendPoint>) {
+        val arr = JSONArray()
+        trends.takeLast(24).forEach { pt ->
+            arr.put(JSONObject().apply {
+                put("id", pt.id)
+                put("periodLabel", pt.periodLabel)
+                put("seasonYear", pt.seasonYear)
+                put("weekNumber", pt.weekNumber)
+                put("leagueValuationMillions", pt.leagueValuationMillions)
+                put("cashReservesMillions", pt.cashReservesMillions)
+                put("financialGrowthPct", pt.financialGrowthPct.toDouble())
+                put("fanSentimentPct", pt.fanSentimentPct)
+                put("avgMoralePct", pt.avgMoralePct)
+                put("avgLoyaltyPct", pt.avgLoyaltyPct)
+                put("totalFanbaseMillions", pt.totalFanbaseMillions)
+                put("leagueRevenueMillions", pt.leagueRevenueMillions)
+                put("tvBroadcastRating", pt.tvBroadcastRating)
+                put("playerSatisfactionPct", pt.playerSatisfactionPct)
+            })
+        }
+        settingsPrefs.edit().putString("dashboard_trends_json", arr.toString()).apply()
+    }
+
+    fun loadDashboardTrends(): List<DashboardTrendPoint> {
+        val raw = settingsPrefs.getString("dashboard_trends_json", null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                DashboardTrendPoint(
+                    id = o.optString("id"),
+                    periodLabel = o.optString("periodLabel", "W1"),
+                    seasonYear = o.optInt("seasonYear", 2026),
+                    weekNumber = o.optInt("weekNumber", 1),
+                    leagueValuationMillions = o.optLong("leagueValuationMillions", 420L),
+                    cashReservesMillions = o.optLong("cashReservesMillions", 95L),
+                    financialGrowthPct = o.optDouble("financialGrowthPct", 0.0).toFloat(),
+                    fanSentimentPct = o.optInt("fanSentimentPct", 75),
+                    avgMoralePct = o.optInt("avgMoralePct", 75),
+                    avgLoyaltyPct = o.optInt("avgLoyaltyPct", 75),
+                    totalFanbaseMillions = o.optDouble("totalFanbaseMillions", 18.2),
+                    leagueRevenueMillions = o.optLong("leagueRevenueMillions", 8L),
+                    tvBroadcastRating = o.optDouble("tvBroadcastRating", 4.2),
+                    playerSatisfactionPct = o.optInt("playerSatisfactionPct", 78)
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    data class LaborCbaExtendedSnapshot(
+        val cbaYearsRemaining: Int,
+        val isLockoutActive: Boolean,
+        val lockoutWeeksLost: Int,
+        val lastLockoutSeasonYear: Int,
+        val negotiatedRosterRule: RosterSizeRule,
+        val mandatoryPrivateCharterFlights: Boolean,
+        val maxBackToBackGamesLimit: Boolean,
+        val independentConcussionProtocol: Boolean,
+        val advancedHybridTurfMandate: Boolean,
+        val postCareerTransitionFundMillions: Long,
+        val fiveStarHotelSingleRooms: Boolean,
+        val minPlayerSalaryK: Long,
+        val playerHealthWelfareMillions: Long
+    )
+
+    fun saveLaborCbaExtendedState(union: LaborUnionAgreement) {
+        val root = JSONObject().apply {
+            put("cbaYearsRemaining", union.cbaYearsRemaining)
+            put("isLockoutActive", union.isLockoutActive)
+            put("lockoutWeeksLost", union.lockoutWeeksLost)
+            put("lastLockoutSeasonYear", union.lastLockoutSeasonYear)
+            put("negotiatedRosterRule", union.negotiatedRosterRule.name)
+            put("mandatoryPrivateCharterFlights", union.mandatoryPrivateCharterFlights)
+            put("maxBackToBackGamesLimit", union.maxBackToBackGamesLimit)
+            put("independentConcussionProtocol", union.independentConcussionProtocol)
+            put("advancedHybridTurfMandate", union.advancedHybridTurfMandate)
+            put("postCareerTransitionFundMillions", union.postCareerTransitionFundMillions)
+            put("fiveStarHotelSingleRooms", union.fiveStarHotelSingleRooms)
+            put("minPlayerSalaryK", union.minPlayerSalaryK)
+            put("playerHealthWelfareMillions", union.playerHealthWelfareMillions)
+        }
+        settingsPrefs.edit().putString("labor_cba_extended_json", root.toString()).apply()
+    }
+
+    fun loadLaborCbaExtendedState(): LaborCbaExtendedSnapshot? {
+        val raw = settingsPrefs.getString("labor_cba_extended_json", null) ?: return null
+        return try {
+            val o = JSONObject(raw)
+            LaborCbaExtendedSnapshot(
+                cbaYearsRemaining = o.optInt("cbaYearsRemaining", 3).coerceIn(0, 10),
+                isLockoutActive = o.optBoolean("isLockoutActive", false),
+                lockoutWeeksLost = o.optInt("lockoutWeeksLost", 0).coerceAtLeast(0),
+                lastLockoutSeasonYear = o.optInt("lastLockoutSeasonYear", 0),
+                negotiatedRosterRule = runCatching { RosterSizeRule.valueOf(o.optString("negotiatedRosterRule")) }
+                    .getOrDefault(RosterSizeRule.STANDARD_15),
+                mandatoryPrivateCharterFlights = o.optBoolean("mandatoryPrivateCharterFlights", true),
+                maxBackToBackGamesLimit = o.optBoolean("maxBackToBackGamesLimit", true),
+                independentConcussionProtocol = o.optBoolean("independentConcussionProtocol", true),
+                advancedHybridTurfMandate = o.optBoolean("advancedHybridTurfMandate", false),
+                postCareerTransitionFundMillions = o.optLong("postCareerTransitionFundMillions", 5L),
+                fiveStarHotelSingleRooms = o.optBoolean("fiveStarHotelSingleRooms", true),
+                minPlayerSalaryK = o.optLong("minPlayerSalaryK", 650L),
+                playerHealthWelfareMillions = o.optLong("playerHealthWelfareMillions", 15L)
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveBroadcastExclusivityState(
+        contract: BroadcastContract,
+        session: BroadcastBiddingSession
+    ) {
+        val root = JSONObject().apply {
+            put("hasExclusivity", contract.hasExclusivity)
+            put("exclusivityLostPenaltyPct", contract.exclusivityLostPenaltyPct)
+            put("networkScope", contract.networkScope.name)
+            put("reachMultiplier", contract.reachMultiplier)
+            put("bonusPerPlayoffGameMillions", contract.bonusPerPlayoffGameMillions)
+            put("biddingRound", session.biddingRound)
+            put("exclusivityRoundsTotal", session.exclusivityRoundsTotal)
+            put("exclusivityRoundsRemaining", session.exclusivityRoundsRemaining)
+            put("exclusivityExpired", session.exclusivityExpired)
+            put("lastPeriodicBidWeek", session.lastPeriodicBidWeek)
+            put("periodicBidsReceivedCount", session.periodicBidsReceivedCount)
+            put("lastEscalationSummary", session.lastEscalationSummary ?: "")
+            put("selectedOfferId", session.selectedOfferId ?: "")
+            put("auctionLog", JSONArray(session.auctionLog.take(15)))
+        }
+        settingsPrefs.edit().putString("broadcast_exclusivity_json", root.toString()).apply()
+    }
+
+    fun applyLoadedBroadcastExclusivity(
+        baseContract: BroadcastContract,
+        bidders: List<NetworkBidder>,
+        teamCount: Int,
+        playerRevenueSharePct: Int,
+        fanbaseMillions: Double,
+        currentYear: Int
+    ): Pair<BroadcastContract, BroadcastBiddingSession?> {
+        val raw = settingsPrefs.getString("broadcast_exclusivity_json", null) ?: return baseContract to null
+        return try {
+            val o = JSONObject(raw)
+            val restoredContract = baseContract.copy(
+                hasExclusivity = o.optBoolean("hasExclusivity", true),
+                exclusivityLostPenaltyPct = o.optInt("exclusivityLostPenaltyPct", 0),
+                networkScope = runCatching { NetworkScope.valueOf(o.optString("networkScope")) }
+                    .getOrDefault(baseContract.networkScope),
+                reachMultiplier = o.optDouble("reachMultiplier", baseContract.reachMultiplier),
+                bonusPerPlayoffGameMillions = o.optLong("bonusPerPlayoffGameMillions", baseContract.bonusPerPlayoffGameMillions)
+            )
+            var session = BroadcastBiddingEngine.createInitialSession(
+                bidders = bidders,
+                currentContract = restoredContract,
+                teamCount = teamCount,
+                playerRevenueSharePct = playerRevenueSharePct,
+                currentFanbaseMillions = fanbaseMillions,
+                currentYear = currentYear
+            )
+            val roundsRemaining = o.optInt("exclusivityRoundsRemaining", 3).coerceIn(0, 5)
+            val expired = o.optBoolean("exclusivityExpired", false)
+            if (expired) {
+                session = BroadcastBiddingEngine.applyExclusivityExpiryPenalty(
+                    session = session,
+                    currentContract = restoredContract,
+                    teamCount = teamCount,
+                    playerRevenueSharePct = playerRevenueSharePct,
+                    currentFanbaseMillions = fanbaseMillions,
+                    currentYear = currentYear
+                )
+            }
+            val logArr = o.optJSONArray("auctionLog") ?: JSONArray()
+            val logs = (0 until logArr.length()).mapNotNull { idx -> logArr.optString(idx).takeIf { it.isNotBlank() } }
+            val restoredSession = session.copy(
+                biddingRound = o.optInt("biddingRound", 1).coerceAtLeast(1),
+                exclusivityRoundsTotal = o.optInt("exclusivityRoundsTotal", 3).coerceAtLeast(1),
+                exclusivityRoundsRemaining = roundsRemaining,
+                exclusivityExpired = expired,
+                lastPeriodicBidWeek = o.optInt("lastPeriodicBidWeek", 0),
+                periodicBidsReceivedCount = o.optInt("periodicBidsReceivedCount", 0),
+                lastEscalationSummary = o.optString("lastEscalationSummary").takeIf { it.isNotBlank() },
+                selectedOfferId = o.optString("selectedOfferId").takeIf { it.isNotBlank() } ?: session.selectedOfferId,
+                auctionLog = logs.ifEmpty { session.auctionLog }
+            )
+            restoredContract to restoredSession
+        } catch (_: Exception) {
+            baseContract to null
+        }
+    }
 }
+

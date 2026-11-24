@@ -25,6 +25,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.BorderStroke
+import com.example.model.RosterSizeRule
 import com.example.model.SalaryCapType
 import com.example.ui.components.LaborUnionNegotiationOverlay
 import com.example.ui.components.ProgressBarWithLabel
@@ -47,6 +49,7 @@ fun LaborUnionNegotiationsScreen(
     // Salary Cap & Payroll Rules
     var salaryCapMillions by remember(union.salaryCapMillions) { mutableStateOf(union.salaryCapMillions.toFloat()) }
     var salaryCapType by remember(union.salaryCapType) { mutableStateOf(union.salaryCapType) }
+    var rosterSizeRule by remember(union.negotiatedRosterRule) { mutableStateOf(union.negotiatedRosterRule) }
 
     // Pillar 1: Salaries & Compensation
     var revenueSharePct by remember(union.playerRevenueSharePct) { mutableStateOf(union.playerRevenueSharePct.toFloat()) }
@@ -65,7 +68,7 @@ fun LaborUnionNegotiationsScreen(
 
     // Dynamic Strike & Satisfaction Calculation
     val projectedSatisfaction by remember(
-        revenueSharePct, minSalaryK, salaryCapMillions, salaryCapType, privateCharters, backToBackLimits,
+        revenueSharePct, minSalaryK, salaryCapMillions, salaryCapType, rosterSizeRule, privateCharters, backToBackLimits,
         concussionProtocol, hybridTurfMandate, fiveStarHotels, healthWelfareMillions, transitionFundMillions
     ) {
         derivedStateOf {
@@ -75,6 +78,8 @@ fun LaborUnionNegotiationsScreen(
             score += (((salaryCapMillions - 80) * 0.25)).toInt() // Higher cap gives players more total payroll
             if (salaryCapType == SalaryCapType.FREE_MARKET) score += 6
             if (salaryCapType == SalaryCapType.HARD_CAP) score -= 4
+            if (rosterSizeRule == RosterSizeRule.EXPANDED_18) score += 6
+            if (rosterSizeRule == RosterSizeRule.COMPACT_12) score -= 5
             if (privateCharters) score += 12
             if (backToBackLimits) score += 10
             if (concussionProtocol) score += 8
@@ -207,16 +212,86 @@ fun LaborUnionNegotiationsScreen(
                                 }
                             }
 
+                            val cbaTimerColor = when {
+                                union.isLockoutActive || union.cbaYearsRemaining <= 0 -> CrimsonAlert
+                                union.cbaYearsRemaining == 1 -> AmberWarning
+                                else -> MaterialTheme.colorScheme.onSurface
+                            }
                             Surface(
-                                color = MaterialTheme.colorScheme.surface,
-                                shape = RoundedCornerShape(8.dp)
+                                color = if (union.cbaYearsRemaining <= 1 || union.isLockoutActive) {
+                                    cbaTimerColor.copy(alpha = 0.16f)
+                                } else {
+                                    MaterialTheme.colorScheme.surface
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                border = if (union.cbaYearsRemaining <= 1 || union.isLockoutActive) {
+                                    BorderStroke(1.dp, cbaTimerColor.copy(alpha = 0.55f))
+                                } else null,
+                                modifier = Modifier.testTag("cba_expiration_timer_badge")
                             ) {
                                 Text(
-                                    text = "${union.cbaYearsRemaining} Years Left on CBA",
+                                    text = when {
+                                        union.isLockoutActive -> "CBA EXPIRED • LOCKOUT"
+                                        union.cbaYearsRemaining <= 0 -> "CBA EXPIRED (0y)"
+                                        union.cbaYearsRemaining == 1 -> "1 Year Left (Expiring!)"
+                                        else -> "${union.cbaYearsRemaining} Years Left on CBA"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
+                                    color = cbaTimerColor,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
+                            }
+                        }
+
+                        if (union.isLockoutActive) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Surface(
+                                color = CrimsonAlert.copy(alpha = 0.16f),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, CrimsonAlert.copy(alpha = 0.65f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("banner_lockout_active")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "OWNER LOCKOUT ACTIVE (${union.lockoutWeeksLost}w lost)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Black,
+                                            color = CrimsonAlert
+                                        )
+                                        Text(
+                                            text = "Fixtures & TV payouts are suspended until a new CBA accord is ratified.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = { viewModel.openLaborNegotiationOverlay() },
+                                        colors = ButtonDefaults.buttonColors(containerColor = CrimsonAlert),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                        modifier = Modifier
+                                            .minimumInteractiveComponentSize()
+                                            .testTag("btn_resolve_lockout")
+                                    ) {
+                                        Text(
+                                            text = "Emergency Accord",
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -247,7 +322,7 @@ fun LaborUnionNegotiationsScreen(
                         OutlinedButton(
                             onClick = { viewModel.openLaborNegotiationOverlay() },
                             shape = RoundedCornerShape(10.dp),
-                            border = androidx.compose.foundation.BorderStroke(
+                            border = BorderStroke(
                                 1.dp,
                                 (if (projectedStrikeRisk > 30) CrimsonAlert else GoldPrimary).copy(alpha = 0.65f)
                             ),
@@ -459,6 +534,101 @@ fun LaborUnionNegotiationsScreen(
                                                     SalaryCapType.SOFT_CAP_LUXURY_TAX -> "Franchises can exceed cap with a 100% luxury tax dollar-for-dollar penalty pooled into union & parity funds."
                                                     SalaryCapType.FREE_MARKET -> "Unlimited payroll spending. Favored by superstar athletes and billionaire owners; reduces competitive balance."
                                                 },
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
+
+                // Roster Size & Taxi Squad Rules Card
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, CyanAccent.copy(alpha = 0.55f), RoundedCornerShape(16.dp))
+                            .testTag("card_cba_roster_rules"),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(Icons.Default.Groups, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(20.dp))
+                                    Text(
+                                        text = "ROSTER SIZE & TAXI SQUAD RULES",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Black,
+                                        color = CyanAccent,
+                                        letterSpacing = 0.8.sp
+                                    )
+                                }
+                                Surface(
+                                    color = CyanAccent.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = "${rosterSizeRule.activeSlots}+${rosterSizeRule.reserveSlots} SLOTS",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Black,
+                                        color = CyanAccent,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "Bargain active roster limits and developmental taxi slots. Expanded rosters boost union jobs (+6 mood) while compact benches lower owner payroll overhead.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            RosterSizeRule.values().forEach { ruleOption ->
+                                val isSel = rosterSizeRule == ruleOption
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 3.dp)
+                                        .clickable { rosterSizeRule = ruleOption }
+                                        .border(
+                                            1.dp,
+                                            if (isSel) CyanAccent else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                            RoundedCornerShape(10.dp)
+                                        )
+                                        .testTag("btn_cba_roster_${ruleOption.name}"),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (isSel) CyanAccent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surface
+                                    ),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = isSel,
+                                            onClick = { rosterSizeRule = ruleOption },
+                                            colors = RadioButtonDefaults.colors(selectedColor = CyanAccent)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Column {
+                                            Text(
+                                                text = ruleOption.displayName,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isSel) CyanAccent else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = ruleOption.description,
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 fontSize = 11.sp
@@ -979,8 +1149,8 @@ fun LaborUnionNegotiationsScreen(
                                 Text("${revenueSharePct.toInt()}%", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Black)
                             }
                             Column {
-                                Text("MIN SALARY", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("\$${minSalaryK.toInt()}K", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Black, color = CyanAccent)
+                                Text("ROSTER", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("${rosterSizeRule.activeSlots}+${rosterSizeRule.reserveSlots}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Black, color = CyanAccent)
                             }
                         }
 
@@ -996,7 +1166,8 @@ fun LaborUnionNegotiationsScreen(
                             concussionProtocol,
                             hybridTurfMandate,
                             transitionFundMillions,
-                            fiveStarHotels
+                            fiveStarHotels,
+                            rosterSizeRule
                         ) {
                             viewModel.previewCbaOwnerVotes(
                                 revenueSharePct = revenueSharePct.toInt(),
@@ -1009,7 +1180,8 @@ fun LaborUnionNegotiationsScreen(
                                 concussionProtocol = concussionProtocol,
                                 hybridTurfMandate = hybridTurfMandate,
                                 transitionFundMillions = transitionFundMillions.toLong(),
-                                fiveStarHotels = fiveStarHotels
+                                fiveStarHotels = fiveStarHotels,
+                                rosterSizeRule = rosterSizeRule
                             )
                         }
 
@@ -1033,7 +1205,8 @@ fun LaborUnionNegotiationsScreen(
                                     concussionProtocol = concussionProtocol,
                                     hybridTurfMandate = hybridTurfMandate,
                                     transitionFundMillions = transitionFundMillions.toLong(),
-                                    fiveStarHotels = fiveStarHotels
+                                    fiveStarHotels = fiveStarHotels,
+                                    rosterSizeRule = rosterSizeRule
                                 )
                             },
                             enabled = projectedSatisfaction >= 45,

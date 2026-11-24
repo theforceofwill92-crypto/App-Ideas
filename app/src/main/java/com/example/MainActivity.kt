@@ -30,6 +30,9 @@ import com.example.ui.components.DashboardSnackbarHost
 import com.example.ui.components.DilemmaDialog
 import com.example.ui.components.LaborUnionNegotiationOverlay
 import com.example.ui.components.NewLeagueDialog
+import com.example.ui.components.RelocationVoteModal
+import com.example.ui.components.RivalAbsorptionNegotiationModal
+import com.example.ui.components.RivalWatchModal
 import com.example.ui.screens.*
 import com.example.ui.theme.GoldPrimary
 import com.example.ui.theme.MyApplicationTheme
@@ -120,6 +123,11 @@ fun MainAppContent(viewModel: LeagueViewModel) {
 
     if (uiState.showJobSecurityLegacyScreen) {
         JobSecurityLegacyScreen(uiState = uiState, viewModel = viewModel)
+        return
+    }
+
+    if (uiState.showFanSentimentScreen) {
+        FanSentimentScreen(uiState = uiState, viewModel = viewModel)
         return
     }
 
@@ -352,6 +360,36 @@ fun MainAppContent(viewModel: LeagueViewModel) {
                         viewModel.dismissLaborNegotiationOverlay()
                         viewModel.openLaborUnionScreen(true)
                     }
+                )
+            }
+
+            if (uiState.showRivalWatchModal) {
+                RivalWatchModal(
+                    rivalLeague = uiState.rivalLeague,
+                    cashReservesMillions = uiState.cashReservesMillions,
+                    ownerApprovalRating = uiState.ownerApprovalRating,
+                    unionHappinessPct = uiState.unionAgreement.unionSatisfaction,
+                    freeAgentPoolSize = uiState.freeAgentPool.size,
+                    onExecuteAction = { action -> viewModel.performRivalWatchAction(action) },
+                    onDismiss = { viewModel.openRivalWatchModal(false) }
+                )
+            }
+
+            uiState.stadiumDealState.activeRelocationVote?.let { voteState ->
+                RelocationVoteModal(
+                    voteState = voteState,
+                    onSelectCity = { cityId -> viewModel.selectRelocationVoteCity(cityId) },
+                    onApproveRelocation = { viewModel.resolveRelocationVote(approve = true) },
+                    onVetoRelocation = { viewModel.resolveRelocationVote(approve = false) }
+                )
+            }
+
+            uiState.rivalLeague.activeAbsorptionNegotiation?.let { negotiationEvent ->
+                RivalAbsorptionNegotiationModal(
+                    event = negotiationEvent,
+                    onToggleCandidate = { candId -> viewModel.toggleRivalAbsorptionCandidate(candId) },
+                    onAcceptAbsorption = { viewModel.resolveRivalAbsorptionNegotiation(acceptAbsorption = true) },
+                    onRejectMerger = { viewModel.resolveRivalAbsorptionNegotiation(acceptAbsorption = false) }
                 )
             }
         }

@@ -1138,3 +1138,423 @@ fun RechartsDualTrendLineChart(
     }
 }
 
+/**
+ * Recharts-style Multi-Series Executive Analytics Chart plotting League Revenue ($M/wk),
+ * TV Broadcast Ratings, and Player Union Satisfaction (%) over time with interactive series
+ * toggles and touch/drag scrubbing.
+ */
+@Composable
+fun RechartsExecutiveTrendsChart(
+    data: List<DashboardTrendPoint>,
+    modifier: Modifier = Modifier,
+    revenueColor: Color = EmeraldAccent,
+    tvRatingColor: Color = GoldPrimary,
+    playerColor: Color = CyanAccent
+) {
+    var showRevenue by remember { mutableStateOf(true) }
+    var showTvRatings by remember { mutableStateOf(true) }
+    var showPlayerSat by remember { mutableStateOf(true) }
+    var selectedIndex by remember { mutableStateOf<Int?>(null) }
+
+    val animatedProgress by animateFloatAsState(
+        targetValue = 1f,
+        animationSpec = tween(durationMillis = 700),
+        label = "executive_trends_anim"
+    )
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("recharts_executive_trends_chart"),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "EXECUTIVE TELEMETRY • RECHARTS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = GoldPrimary,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 0.9.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "League Revenue, TV Ratings & Player Satisfaction",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (data.isNotEmpty()) {
+                    val activePoint = selectedIndex?.let { data.getOrNull(it) } ?: data.last()
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = activePoint.periodLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = CyanAccent,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            if (data.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(110.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Simulate a week to populate Revenue, TV Ratings & Player Satisfaction.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                return@Column
+            }
+
+            val activePoint = selectedIndex?.let { data.getOrNull(it) } ?: data.last()
+
+            // 3 Interactive Series Toggles
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                ExecutiveSeriesTogglePill(
+                    label = "Revenue",
+                    value = "\$${activePoint.leagueRevenueMillions}M",
+                    color = revenueColor,
+                    active = showRevenue,
+                    onClick = {
+                        val next = !showRevenue
+                        if (next || showTvRatings || showPlayerSat) showRevenue = next
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("trend_toggle_revenue")
+                )
+                ExecutiveSeriesTogglePill(
+                    label = "TV Rating",
+                    value = String.format("%.1f", activePoint.tvBroadcastRating),
+                    color = tvRatingColor,
+                    active = showTvRatings,
+                    onClick = {
+                        val next = !showTvRatings
+                        if (next || showRevenue || showPlayerSat) showTvRatings = next
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("trend_toggle_tv_ratings")
+                )
+                ExecutiveSeriesTogglePill(
+                    label = "Players",
+                    value = "${activePoint.playerSatisfactionPct}%",
+                    color = playerColor,
+                    active = showPlayerSat,
+                    onClick = {
+                        val next = !showPlayerSat
+                        if (next || showRevenue || showTvRatings) showPlayerSat = next
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("trend_toggle_player_satisfaction")
+                )
+            }
+
+            val minRev = (data.minOf { it.leagueRevenueMillions }.toFloat() - 3f).coerceAtLeast(0f)
+            val maxRev = (data.maxOf { it.leagueRevenueMillions }.toFloat() + 3f).coerceAtLeast(minRev + 4f)
+
+            val minTv = (data.minOf { it.tvBroadcastRating }.toFloat() - 0.8f).coerceAtLeast(0.5f)
+            val maxTv = (data.maxOf { it.tvBroadcastRating }.toFloat() + 0.8f).coerceAtLeast(minTv + 1.5f)
+
+            val minPa = (data.minOf { it.playerSatisfactionPct }.toFloat() - 10f).coerceAtLeast(0f)
+            val maxPa = (data.maxOf { it.playerSatisfactionPct }.toFloat() + 10f).coerceAtMost(100f)
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(166.dp)
+                    .testTag("executive_trends_canvas")
+                    .pointerInput(data) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                val itemWidth = size.width / (data.size - 1).coerceAtLeast(1)
+                                selectedIndex = (offset.x / itemWidth).toInt().coerceIn(0, data.size - 1)
+                            },
+                            onDrag = { change, _ ->
+                                val itemWidth = size.width / (data.size - 1).coerceAtLeast(1)
+                                selectedIndex = (change.position.x / itemWidth).toInt().coerceIn(0, data.size - 1)
+                            },
+                            onDragEnd = { selectedIndex = null },
+                            onDragCancel = { selectedIndex = null }
+                        )
+                    }
+                    .pointerInput(data) {
+                        detectTapGestures(
+                            onTap = { offset ->
+                                val itemWidth = size.width / (data.size - 1).coerceAtLeast(1)
+                                val idx = (offset.x / itemWidth).toInt().coerceIn(0, data.size - 1)
+                                selectedIndex = if (selectedIndex == idx) null else idx
+                            }
+                        )
+                    }
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val width = size.width
+                    val height = size.height
+                    val paddingVertical = 10.dp.toPx()
+                    val graphHeight = (height - (paddingVertical * 2f)).coerceAtLeast(1f)
+                    val count = data.size
+
+                    val gridLineColor = Color(0xFF334155).copy(alpha = 0.45f)
+                    for (i in 0..3) {
+                        val y = paddingVertical + (graphHeight / 3f) * i
+                        drawLine(
+                            color = gridLineColor,
+                            start = Offset(0f, y),
+                            end = Offset(width, y),
+                            strokeWidth = 1.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
+                        )
+                    }
+
+                    if (count == 1) {
+                        val cx = width / 2f
+                        val cy = paddingVertical + (graphHeight / 2f)
+                        if (showRevenue) drawCircle(color = revenueColor, radius = 5.dp.toPx(), center = Offset(cx, cy))
+                        if (showTvRatings) drawCircle(color = tvRatingColor, radius = 5.dp.toPx(), center = Offset(cx, cy - 10.dp.toPx()))
+                        if (showPlayerSat) drawCircle(color = playerColor, radius = 5.dp.toPx(), center = Offset(cx, cy + 10.dp.toPx()))
+                        return@Canvas
+                    }
+
+                    val stepX = width / (count - 1).toFloat()
+
+                    val revPoints = data.mapIndexed { idx, pt ->
+                        val normY = ((pt.leagueRevenueMillions.toFloat() - minRev) / (maxRev - minRev).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        Offset(idx * stepX, paddingVertical + graphHeight - (normY * graphHeight * animatedProgress))
+                    }
+                    val tvPoints = data.mapIndexed { idx, pt ->
+                        val normY = ((pt.tvBroadcastRating.toFloat() - minTv) / (maxTv - minTv).coerceAtLeast(0.5f)).coerceIn(0f, 1f)
+                        Offset(idx * stepX, paddingVertical + graphHeight - (normY * graphHeight * animatedProgress))
+                    }
+                    val paPoints = data.mapIndexed { idx, pt ->
+                        val normY = ((pt.playerSatisfactionPct.toFloat() - minPa) / (maxPa - minPa).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        Offset(idx * stepX, paddingVertical + graphHeight - (normY * graphHeight * animatedProgress))
+                    }
+
+                    fun buildSmoothPath(pts: List<Offset>): Path = Path().apply {
+                        moveTo(pts.first().x, pts.first().y)
+                        for (i in 0 until pts.size - 1) {
+                            val p0 = pts[i]
+                            val p1 = pts[i + 1]
+                            val cx = (p0.x + p1.x) / 2f
+                            cubicTo(cx, p0.y, cx, p1.y, p1.x, p1.y)
+                        }
+                    }
+
+                    if (showRevenue) {
+                        val strokePath = buildSmoothPath(revPoints)
+                        val fillPath = Path().apply {
+                            addPath(strokePath)
+                            lineTo(revPoints.last().x, paddingVertical + graphHeight)
+                            lineTo(revPoints.first().x, paddingVertical + graphHeight)
+                            close()
+                        }
+                        drawPath(
+                            path = fillPath,
+                            brush = Brush.verticalGradient(
+                                colors = listOf(revenueColor.copy(alpha = 0.22f), Color.Transparent),
+                                startY = paddingVertical,
+                                endY = paddingVertical + graphHeight
+                            )
+                        )
+                        drawPath(
+                            path = strokePath,
+                            color = revenueColor,
+                            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+                        revPoints.forEachIndexed { idx, pt ->
+                            val isSelected = selectedIndex == idx
+                            drawCircle(
+                                color = if (isSelected) Color.White else revenueColor,
+                                radius = if (isSelected) 5.dp.toPx() else 3.dp.toPx(),
+                                center = pt
+                            )
+                        }
+                    }
+
+                    if (showTvRatings) {
+                        drawPath(
+                            path = buildSmoothPath(tvPoints),
+                            color = tvRatingColor,
+                            style = Stroke(width = 2.75.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+                        tvPoints.forEachIndexed { idx, pt ->
+                            val isSelected = selectedIndex == idx
+                            drawCircle(
+                                color = if (isSelected) Color.White else tvRatingColor,
+                                radius = if (isSelected) 5.dp.toPx() else 3.dp.toPx(),
+                                center = pt
+                            )
+                        }
+                    }
+
+                    if (showPlayerSat) {
+                        drawPath(
+                            path = buildSmoothPath(paPoints),
+                            color = playerColor,
+                            style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+                        paPoints.forEachIndexed { idx, pt ->
+                            val isSelected = selectedIndex == idx
+                            drawCircle(
+                                color = if (isSelected) Color.White else playerColor,
+                                radius = if (isSelected) 5.dp.toPx() else 2.8.dp.toPx(),
+                                center = pt
+                            )
+                        }
+                    }
+
+                    val activeCursorIdx = selectedIndex
+                    if (activeCursorIdx != null && activeCursorIdx in revPoints.indices) {
+                        val cursorX = revPoints[activeCursorIdx].x
+                        drawLine(
+                            color = GoldPrimary.copy(alpha = 0.7f),
+                            start = Offset(cursorX, paddingVertical),
+                            end = Offset(cursorX, paddingVertical + graphHeight),
+                            strokeWidth = 1.5.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                data.forEachIndexed { idx, point ->
+                    val shouldShow = data.size <= 7 || idx == 0 || idx == data.size - 1 || idx % (data.size / 4).coerceAtLeast(1) == 0
+                    if (shouldShow) {
+                        Text(
+                            text = point.periodLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (selectedIndex == idx) GoldPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (selectedIndex == idx) FontWeight.Black else FontWeight.Normal,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            }
+
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics(mergeDescendants = true) {}
+                    .testTag("executive_trends_scrub_details")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${activePoint.periodLabel} • Rev \$${activePoint.leagueRevenueMillions}M/wk",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = revenueColor
+                    )
+                    Text(
+                        text = "TV ${String.format("%.1f", activePoint.tvBroadcastRating)} • Players ${activePoint.playerSatisfactionPct}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = tvRatingColor
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExecutiveSeriesTogglePill(
+    label: String,
+    value: String,
+    color: Color,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        color = if (active) color.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(
+            1.dp,
+            if (active) color.copy(alpha = 0.65f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(if (active) color else TextMuted)
+                )
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                text = value,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Black,
+                color = if (active) color else TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}

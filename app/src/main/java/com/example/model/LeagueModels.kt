@@ -303,7 +303,10 @@ data class MarketCity(
     val arenaCapacity: Int = 21000,
     val competingMajorTeamsCount: Int = 2,
     val arenaReadinessStatus: String = "Turnkey Modern Arena",
-    val investorGroupProfile: String = "Regional Investment Consortium"
+    val investorGroupProfile: String = "Regional Investment Consortium",
+    val hasBuiltExpansionArena: Boolean = false,
+    val arenaBuildCostSpentMillions: Long = 0L,
+    val expansionArenaTierName: String = ""
 ) {
     val overallViabilityScore: Int
         get() = ((sportsAppetite * 0.45) + (populationMillions.coerceAtMost(10.0) * 3.5) + (annualGrowthRatePct * 4.0)).toInt().coerceIn(40, 99)
@@ -874,7 +877,9 @@ data class Franchise(
     val fanLoyalty: Int = 75, // 0-100 driven by performance, ticket pricing & marketing
     val activeFranchiseCampaign: ActiveFranchiseCampaign? = null,
     val lastLoyaltyDrivers: FanLoyaltyDrivers = FanLoyaltyDrivers(),
-    val facilities: FranchiseFacilities = FranchiseFacilities()
+    val facilities: FranchiseFacilities = FranchiseFacilities(),
+    val stadiumAge: Int = 14,
+    val stadiumCondition: Int = 78
 ) {
     val winPct: Double
         get() = if (wins + losses == 0) 0.500 else wins.toDouble() / (wins + losses)
@@ -939,7 +944,9 @@ data class BroadcastContract(
     val reachMultiplier: Double,
     val bonusPerPlayoffGameMillions: Long = 4L,
     val upfrontSigningBonusMillions: Long = 0L,
-    val networkScope: NetworkScope = NetworkScope.NATIONAL_CABLE
+    val networkScope: NetworkScope = NetworkScope.NATIONAL_CABLE,
+    val hasExclusivity: Boolean = true,
+    val exclusivityLostPenaltyPct: Int = 0
 )
 
 data class NetworkBidder(
@@ -979,7 +986,11 @@ data class LaborUnionAgreement(
     val independentConcussionProtocol: Boolean = true,
     val advancedHybridTurfMandate: Boolean = false,
     val postCareerTransitionFundMillions: Long = 5L,
-    val fiveStarHotelSingleRooms: Boolean = true
+    val fiveStarHotelSingleRooms: Boolean = true,
+    val isLockoutActive: Boolean = false,
+    val lockoutWeeksLost: Int = 0,
+    val lastLockoutSeasonYear: Int = 0,
+    val negotiatedRosterRule: RosterSizeRule = RosterSizeRule.STANDARD_15
 )
 
 enum class PolicyStrictness(val title: String, val integrityModifier: Int, val playerMoraleModifier: Int) {

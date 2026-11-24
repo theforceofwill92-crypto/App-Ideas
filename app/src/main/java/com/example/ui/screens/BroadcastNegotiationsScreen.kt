@@ -231,7 +231,42 @@ fun BroadcastNegotiationsScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        val exclusivityColor = if (session.exclusivityExpired) CrimsonAlert else GoldPrimary
+                        Surface(
+                            color = exclusivityColor.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, exclusivityColor.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+                                .testTag(if (session.exclusivityExpired) "broadcast_expiry_banner" else "broadcast_exclusivity_status")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (session.exclusivityExpired) Icons.Default.Warning else Icons.Default.Schedule,
+                                    contentDescription = "Broadcast Exclusivity Window",
+                                    tint = exclusivityColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = if (session.exclusivityExpired) {
+                                        "EXCLUSIVITY EXPIRED: Non-exclusive penalty active (-${session.nonExclusiveRevenuePenaltyPct}% TV payout, -${session.nonExclusiveReachPenaltyPct}% reach)."
+                                    } else {
+                                        "EXCLUSIVITY WINDOW: ${session.exclusivityRoundsRemaining}/${session.exclusivityRoundsTotal} cycles before penalty • ${session.periodicBidsReceivedCount} rival bid(s)"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
 
                         Button(
                             onClick = { viewModel.runBroadcastBiddingRound() },
@@ -258,6 +293,30 @@ fun BroadcastNegotiationsScreen(
                                 },
                                 color = Color.Black,
                                 fontWeight = FontWeight.Black
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedButton(
+                            onClick = { viewModel.triggerPeriodicBroadcastBidNow() },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .minimumInteractiveComponentSize()
+                                .testTag("btn_periodic_rival_bid")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.NotificationsActive,
+                                contentDescription = "Receive Periodic Rival Bid",
+                                tint = GoldPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Receive Periodic Rival Bid",
+                                fontWeight = FontWeight.Bold,
+                                color = GoldPrimary
                             )
                         }
 
@@ -996,7 +1055,28 @@ fun BroadcastNegotiationsScreen(
                             }
                             Column {
                                 Text("REACH", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("${currentOffer.bidder.reachMultiplier}x", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = "${String.format("%.2f", BroadcastBiddingEngine.effectiveReachForOffer(currentOffer))}x",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (currentOffer.isExclusivityExpired) CrimsonAlert else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        if (currentOffer.isExclusivityExpired) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Surface(
+                                color = CrimsonAlert.copy(alpha = 0.16f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = "NON-EXCLUSIVE (-22% TV Payout / -20% Reach Penalty)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Black,
+                                    color = CrimsonAlert,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
                             }
                         }
 
@@ -1124,6 +1204,16 @@ private fun BroadcastOfferCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            if (offer.isExclusivityExpired) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "NON-EXCLUSIVE (-22%)",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black,
+                    color = CrimsonAlert
+                )
+            }
         }
     }
 }

@@ -224,9 +224,15 @@ object FacilityEngine {
 
         val newRosterRating = (franchise.rosterRating + project.rosterOvrGain).coerceIn(50, 99)
         val newLoyalty = (franchise.fanLoyalty + project.loyaltyGain).coerceIn(10, 100)
+        val conditionGain = when (project.type) {
+            FacilityType.STADIUM_SEATING -> 14
+            FacilityType.LUXURY_SUITES -> 6
+            FacilityType.TRAINING_CENTER -> 0
+        }
 
         return franchise.copy(
             stadiumCapacity = franchise.stadiumCapacity + project.seatingCapacityGain,
+            stadiumCondition = (franchise.stadiumCondition + conditionGain).coerceIn(0, 100),
             localSponsorRevenueMillions = franchise.localSponsorRevenueMillions + project.annualSponsorGainMillions,
             rosterRating = newRosterRating,
             fanLoyalty = newLoyalty,

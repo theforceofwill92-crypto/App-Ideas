@@ -53,7 +53,8 @@ data class BroadcastContractOffer(
     val bidStatus: BroadcastBidStatus = BroadcastBidStatus.ACTIVE_OFFER,
     val maxAnnualCeilingMillions: Long,
     val maxBonusCeilingMillions: Long,
-    val impact: BroadcastLongTermImpact
+    val impact: BroadcastLongTermImpact,
+    val isExclusivityExpired: Boolean = false
 )
 
 data class BroadcastBiddingSession(
@@ -61,10 +62,28 @@ data class BroadcastBiddingSession(
     val offers: List<BroadcastContractOffer> = emptyList(),
     val selectedOfferId: String? = null,
     val auctionLog: List<String> = emptyList(),
-    val lastEscalationSummary: String? = null
+    val lastEscalationSummary: String? = null,
+    val exclusivityRoundsTotal: Int = 3,
+    val exclusivityRoundsRemaining: Int = 3,
+    val exclusivityExpired: Boolean = false,
+    val nonExclusiveRevenuePenaltyPct: Int = 22,
+    val nonExclusiveReachPenaltyPct: Int = 20,
+    val lastPeriodicBidWeek: Int = 0,
+    val periodicBidsReceivedCount: Int = 0
+)
+
+data class PeriodicBroadcastTickResult(
+    val updatedSession: BroadcastBiddingSession,
+    val bidderName: String? = null,
+    val headline: String? = null,
+    val exclusivityJustExpired: Boolean = false
 )
 
 object BroadcastBiddingEngine {
+
+    const val EXPIRY_REVENUE_PENALTY_PCT = 22
+    const val EXPIRY_BONUS_PENALTY_PCT = 35
+    const val EXPIRY_REACH_PENALTY_PCT = 20
 
     private fun defaultEscalatorForScope(scope: NetworkScope): Double = when (scope) {
         NetworkScope.GLOBAL_STREAMING -> 7.0
@@ -78,6 +97,14 @@ object BroadcastBiddingEngine {
         NetworkScope.NATIONAL_CABLE -> 5L
         NetworkScope.FREE_TO_AIR -> 4L
         NetworkScope.REGIONAL_RSN -> 3L
+    }
+
+    fun effectiveReachForOffer(offer: BroadcastContractOffer): Double {
+        return if (offer.isExclusivityExpired) {
+            (offer.bidder.reachMultiplier * (1.0 - (EXPIRY_REACH_PENALTY_PCT / 100.0))).coerceAtLeast(0.85)
+        } else {
+            offer.bidder.reachMultiplier
+        }
     }
 
     fun evaluateLongTermImpact(
@@ -223,14 +250,15 @@ object BroadcastBiddingEngine {
                 bidStatus = BroadcastBidStatus.ACTIVE_OFFER,
                 maxAnnualCeilingMillions = (bidder.baseAnnualPayoutMillions * 1.35).roundToLong(),
                 maxBonusCeilingMillions = (bidder.baseLumpSumMillions + 26L).coerceAtMost(75L),
-                impact = impact
+                impact = impact,
+                isExclusivityExpired = false
             )
         }
 
         val ranked = markLeadingOffer(rawOffers)
         val leader = ranked.find { it.bidStatus == BroadcastBidStatus.LEADING_BID } ?: ranked.firstOrNull()
         val openingLog = if (leader != null) {
-            "Round 1 Bidding Opened: ${ranked.size} networks submitted rights proposals (${leader.bidder.name} leads at \$${leader.impact.cumulativeGrossValueMillions}M total)."
+            "Round 1 Bidding Opened: ${ranked.size} networks submitted rights proposals (${leader.bidder.name} leads at \$${leader.impact.cumulativeGrossValueMillions}M total). Exclusivity window: 3 cycles."
         } else {
             "Broadcast Bidding Desk Ready."
         }
@@ -240,7 +268,170 @@ object BroadcastBiddingEngine {
             offers = ranked,
             selectedOfferId = leader?.id ?: ranked.firstOrNull()?.id,
             auctionLog = listOf(openingLog),
-            lastEscalationSummary = null
+            lastEscalationSummary = null,
+            exclusivityRoundsTotal = 3,
+            exclusivityRoundsRemaining = 3,
+            exclusivityExpired = false,
+            nonExclusiveRevenuePenaltyPct = EXPIRY_REVENUE_PENALTY_PCT,
+            nonExclusiveReachPenaltyPct = EXPIRY_REACH_PENALTY_PCT,
+            lastPeriodicBidWeek = 0,
+            periodicBidsReceivedCount = 0
+        )
+    }
+
+    fun applyExclusivityExpiryPenalty(
+        session: BroadcastBiddingSession,
+        currentContract: BroadcastContract,
+        teamCount: Int,
+        playerRevenueSharePct: Int,
+        currentFanbaseMillions: Double,
+        currentYear: Int
+    ): BroadcastBiddingSession {
+        if (session.exclusivityExpired) return session
+        val penalizedOffers = session.offers.map { offer ->
+            if (offer.bidStatus == BroadcastBidStatus.WITHDRAWN) {
+                offer.copy(isExclusivityExpired = true)
+            } else {
+                val cutAnnual = (offer.annualPayoutMillions * (1.0 - EXPIRY_REVENUE_PENALTY_PCT / 100.0))
+                    .roundToLong()
+                    .coerceAtLeast(32L)
+                val cutBonus = (offer.lumpSumBonusMillions * (1.0 - EXPIRY_BONUS_PENALTY_PCT / 100.0))
+                    .roundToLong()
+                    .coerceAtLeast(5L)
+                val reducedReach = (offer.bidder.reachMultiplier * (1.0 - EXPIRY_REACH_PENALTY_PCT / 100.0))
+                    .coerceAtLeast(0.85)
+                val newImpact = evaluateLongTermImpact(
+                    year1AnnualPayoutMillions = cutAnnual,
+                    lumpSumBonusMillions = cutBonus,
+                    termYears = offer.termYears,
+                    annualEscalatorPct = offer.annualEscalatorPct,
+                    playoffBonusPerGameMillions = (offer.playoffBonusPerGameMillions - 1L).coerceAtLeast(1L),
+                    reachMultiplier = reducedReach,
+                    scope = offer.bidder.scope,
+                    currentContract = currentContract,
+                    teamCount = teamCount,
+                    playerRevenueSharePct = playerRevenueSharePct,
+                    currentFanbaseMillions = currentFanbaseMillions,
+                    currentYear = currentYear
+                )
+                offer.copy(
+                    annualPayoutMillions = cutAnnual,
+                    lumpSumBonusMillions = cutBonus,
+                    digitalExclusivityIncluded = false,
+                    currentPatience = (offer.currentPatience - 14).coerceAtLeast(12),
+                    latestExecutiveNote = "Exclusivity window lapsed! Re-priced as non-exclusive package (-${EXPIRY_REVENUE_PENALTY_PCT}% annual, -${EXPIRY_REACH_PENALTY_PCT}% fan reach).",
+                    impact = newImpact,
+                    isExclusivityExpired = true
+                )
+            }
+        }
+        val ranked = markLeadingOffer(penalizedOffers)
+        val expiryNote = "EXCLUSIVITY EXPIRED: Waiting past the broadcast exclusivity window reduced all network bids by ${EXPIRY_REVENUE_PENALTY_PCT}% payout & ${EXPIRY_REACH_PENALTY_PCT}% fan reach."
+        return session.copy(
+            offers = ranked,
+            exclusivityRoundsRemaining = 0,
+            exclusivityExpired = true,
+            auctionLog = (listOf(expiryNote) + session.auctionLog).take(20),
+            lastEscalationSummary = expiryNote
+        )
+    }
+
+    fun receivePeriodicRivalBid(
+        session: BroadcastBiddingSession,
+        currentContract: BroadcastContract,
+        teamCount: Int,
+        playerRevenueSharePct: Int,
+        currentFanbaseMillions: Double,
+        currentYear: Int,
+        weekNumber: Int
+    ): PeriodicBroadcastTickResult {
+        if (session.offers.isEmpty()) {
+            return PeriodicBroadcastTickResult(updatedSession = session)
+        }
+        val activeNonLeading = session.offers.filter {
+            it.bidStatus != BroadcastBidStatus.WITHDRAWN && it.bidStatus != BroadcastBidStatus.LEADING_BID
+        }
+        val targetPool = if (activeNonLeading.isNotEmpty()) activeNonLeading else session.offers.filter {
+            it.bidStatus != BroadcastBidStatus.WITHDRAWN
+        }
+        if (targetPool.isEmpty()) {
+            return PeriodicBroadcastTickResult(updatedSession = session)
+        }
+
+        val chosen = targetPool[(weekNumber + session.periodicBidsReceivedCount) % targetPool.size]
+        val nextRoundsRemaining = (session.exclusivityRoundsRemaining - 1).coerceAtLeast(0)
+        val annualBoost = if (!session.exclusivityExpired) 6L + ((weekNumber % 3).toLong()) else 3L
+        val bonusBoost = if (!session.exclusivityExpired) 4L else 1L
+        val raisedAnnual = (chosen.annualPayoutMillions + annualBoost).coerceAtMost(chosen.maxAnnualCeilingMillions + 10L)
+        val raisedBonus = (chosen.lumpSumBonusMillions + bonusBoost).coerceAtMost(chosen.maxBonusCeilingMillions + 6L)
+
+        val updatedOffers = session.offers.map { offer ->
+            if (offer.id != chosen.id) offer else {
+                val newImpact = evaluateLongTermImpact(
+                    year1AnnualPayoutMillions = raisedAnnual,
+                    lumpSumBonusMillions = raisedBonus,
+                    termYears = offer.termYears,
+                    annualEscalatorPct = offer.annualEscalatorPct,
+                    playoffBonusPerGameMillions = offer.playoffBonusPerGameMillions,
+                    reachMultiplier = effectiveReachForOffer(offer),
+                    scope = offer.bidder.scope,
+                    currentContract = currentContract,
+                    teamCount = teamCount,
+                    playerRevenueSharePct = playerRevenueSharePct,
+                    currentFanbaseMillions = currentFanbaseMillions,
+                    currentYear = currentYear
+                )
+                offer.copy(
+                    annualPayoutMillions = raisedAnnual,
+                    lumpSumBonusMillions = raisedBonus,
+                    maxAnnualCeilingMillions = maxOf(offer.maxAnnualCeilingMillions, raisedAnnual),
+                    maxBonusCeilingMillions = maxOf(offer.maxBonusCeilingMillions, raisedBonus),
+                    latestExecutiveNote = "Periodic Rival Bid (W$weekNumber): ${offer.bidder.name} submitted an unsolicited \$${raisedAnnual}M/yr + \$${raisedBonus}M bonus counter-bid!",
+                    impact = newImpact
+                )
+            }
+        }
+
+        val ranked = markLeadingOffer(updatedOffers)
+        val expiryWarning = if (!session.exclusivityExpired && nextRoundsRemaining > 0) {
+            " ($nextRoundsRemaining cycle${if (nextRoundsRemaining == 1) "" else "s"} left before exclusivity expires)"
+        } else ""
+        val bidLog = "Week $weekNumber Rival Bid: ${chosen.bidder.name} escalated to \$${raisedAnnual}M/yr + \$${raisedBonus}M bonus.$expiryWarning"
+
+        var nextSession = session.copy(
+            offers = ranked,
+            selectedOfferId = chosen.id,
+            exclusivityRoundsRemaining = nextRoundsRemaining,
+            lastPeriodicBidWeek = weekNumber,
+            periodicBidsReceivedCount = session.periodicBidsReceivedCount + 1,
+            auctionLog = (listOf(bidLog) + session.auctionLog).take(20),
+            lastEscalationSummary = bidLog
+        )
+
+        var justExpired = false
+        if (!nextSession.exclusivityExpired && nextRoundsRemaining <= 0) {
+            nextSession = applyExclusivityExpiryPenalty(
+                session = nextSession,
+                currentContract = currentContract,
+                teamCount = teamCount,
+                playerRevenueSharePct = playerRevenueSharePct,
+                currentFanbaseMillions = currentFanbaseMillions,
+                currentYear = currentYear
+            )
+            justExpired = true
+        }
+
+        val headline = if (justExpired) {
+            "BROADCAST EXCLUSIVITY EXPIRED (W$weekNumber): Holding out triggered a -${EXPIRY_REVENUE_PENALTY_PCT}% non-exclusive market haircut!"
+        } else {
+            "RIVAL TV BID (W$weekNumber): ${chosen.bidder.name} offers \$${raisedAnnual}M/yr + \$${raisedBonus}M upfront!"
+        }
+
+        return PeriodicBroadcastTickResult(
+            updatedSession = nextSession,
+            bidderName = chosen.bidder.name,
+            headline = headline,
+            exclusivityJustExpired = justExpired
         )
     }
 
@@ -259,7 +450,7 @@ object BroadcastBiddingEngine {
                 termYears = offer.termYears,
                 annualEscalatorPct = offer.annualEscalatorPct,
                 playoffBonusPerGameMillions = offer.playoffBonusPerGameMillions,
-                reachMultiplier = offer.bidder.reachMultiplier,
+                reachMultiplier = effectiveReachForOffer(offer),
                 scope = offer.bidder.scope,
                 currentContract = currentContract,
                 teamCount = teamCount,
@@ -290,7 +481,7 @@ object BroadcastBiddingEngine {
 
         val currentTopValue = activeBefore.maxOfOrNull { it.impact.cumulativeGrossValueMillions } ?: 0L
         var raisedCount = 0
-        var withdrawnNames = mutableListOf<String>()
+        val withdrawnNames = mutableListOf<String>()
 
         val steppedOffers = session.offers.mapIndexed { idx, offer ->
             if (offer.bidStatus == BroadcastBidStatus.WITHDRAWN) {
@@ -328,7 +519,7 @@ object BroadcastBiddingEngine {
                         termYears = offer.termYears,
                         annualEscalatorPct = newEscalator,
                         playoffBonusPerGameMillions = offer.playoffBonusPerGameMillions,
-                        reachMultiplier = offer.bidder.reachMultiplier,
+                        reachMultiplier = effectiveReachForOffer(offer),
                         scope = offer.bidder.scope,
                         currentContract = currentContract,
                         teamCount = teamCount,
@@ -356,6 +547,7 @@ object BroadcastBiddingEngine {
 
         val ranked = markLeadingOffer(steppedOffers)
         val leader = ranked.find { it.bidStatus == BroadcastBidStatus.LEADING_BID } ?: ranked.firstOrNull()
+        val nextExclusivityRemaining = (session.exclusivityRoundsRemaining - 1).coerceAtLeast(0)
         val summary = buildString {
             append("Round $nextRound Complete: $raisedCount networks raised bids")
             if (withdrawnNames.isNotEmpty()) {
@@ -366,13 +558,27 @@ object BroadcastBiddingEngine {
             }
         }
 
-        return session.copy(
+        val preExpirySession = session.copy(
             biddingRound = nextRound,
             offers = ranked,
             selectedOfferId = session.selectedOfferId ?: leader?.id,
             auctionLog = (listOf(summary) + session.auctionLog).take(20),
-            lastEscalationSummary = summary
+            lastEscalationSummary = summary,
+            exclusivityRoundsRemaining = nextExclusivityRemaining
         )
+
+        return if (!preExpirySession.exclusivityExpired && nextExclusivityRemaining <= 0) {
+            applyExclusivityExpiryPenalty(
+                session = preExpirySession,
+                currentContract = currentContract,
+                teamCount = teamCount,
+                playerRevenueSharePct = playerRevenueSharePct,
+                currentFanbaseMillions = currentFanbaseMillions,
+                currentYear = currentYear
+            )
+        } else {
+            preExpirySession
+        }
     }
 
     fun updateOfferTerms(
@@ -404,7 +610,7 @@ object BroadcastBiddingEngine {
                     termYears = safeTerm,
                     annualEscalatorPct = offer.annualEscalatorPct,
                     playoffBonusPerGameMillions = offer.playoffBonusPerGameMillions,
-                    reachMultiplier = offer.bidder.reachMultiplier,
+                    reachMultiplier = effectiveReachForOffer(offer),
                     scope = offer.bidder.scope,
                     currentContract = currentContract,
                     teamCount = teamCount,

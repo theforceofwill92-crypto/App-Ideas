@@ -25,7 +25,12 @@ object LeagueSimulationEngine {
         facilityValuationGainMillions: Long,
         specialEventBonusMillions: Double = 0.0
     ): WeeklyRevenueBreakdown {
-        val weeklyBroadcastPayout = (activeBroadcast.annualPayoutMillions / 16.0) + specialEventBonusMillions
+        val exclusivityMultiplier = if (activeBroadcast.hasExclusivity) {
+            1.0
+        } else {
+            ((100 - activeBroadcast.exclusivityLostPenaltyPct.coerceIn(0, 50)) / 100.0)
+        }
+        val weeklyBroadcastPayout = ((activeBroadcast.annualPayoutMillions / 16.0) * exclusivityMultiplier) + specialEventBonusMillions
         val weeklySponsorRevenue = franchises.sumOf {
             (it.localSponsorRevenueMillions + it.facilities.annualSuitePremiumMillions) *
                 FanLoyaltyEngine.sponsorLoyaltyMultiplier(it.fanLoyalty)
@@ -116,7 +121,12 @@ object LeagueSimulationEngine {
         facilityValuationGainMillions: Long
     ): WeeklyRevenueBreakdown {
         val playoffRivalryCut = (rivalryTicketBonusMillions * 0.25).roundToLong()
-        val broadcastShare = activeBroadcast.annualPayoutMillions / 16.0
+        val exclusivityMultiplier = if (activeBroadcast.hasExclusivity) {
+            1.0
+        } else {
+            ((100 - activeBroadcast.exclusivityLostPenaltyPct.coerceIn(0, 50)) / 100.0)
+        }
+        val broadcastShare = (activeBroadcast.annualPayoutMillions / 16.0) * exclusivityMultiplier
         val sponsorShare = franchises.sumOf { it.localSponsorRevenueMillions } / 16.0
         val grossRevenue = playoffRivalryCut.coerceAtLeast(1L)
         val playerShareCost = (broadcastShare + sponsorShare) * (unionAgreement.playerRevenueSharePct / 100.0)

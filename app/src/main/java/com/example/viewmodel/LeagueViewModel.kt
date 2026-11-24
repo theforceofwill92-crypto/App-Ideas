@@ -243,7 +243,17 @@ data class LeagueUiState(
     val seasonScheduleState: SeasonScheduleState = initialScheduleBoot,
     val showScheduleCalendarScreen: Boolean = false,
     val jobSecurityLegacyState: JobSecurityLegacyState = initialJobSecurityBoot,
-    val showJobSecurityLegacyScreen: Boolean = false
+    val showJobSecurityLegacyScreen: Boolean = false,
+    val rivalLeague: RivalLeague = RivalLeagueEngine.createDefaultRivalLeague(SportType.BASKETBALL),
+    val showRivalWatchModal: Boolean = false,
+    val stadiumDealState: StadiumDealState = StadiumDealState(),
+    val fanSentimentState: FanSentimentState = FanSentimentEngine.createInitialState(
+        sportType = SportType.BASKETBALL,
+        leagueName = "Apex League",
+        franchises = initialMinorSyncBoot.updatedFranchises,
+        seasonYear = 2026
+    ),
+    val showFanSentimentScreen: Boolean = false
 ) {
     fun toPerformanceInput(seasonChampionNameOverride: String? = null): CommissionerPerformanceInput =
         CommissionerPerformanceInput(
@@ -314,7 +324,13 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         val initialTrends = coreSimulationViewModel.seedDashboardTrendsIfNeeded(_uiState.value)
-        _uiState.update { it.copy(dashboardTrends = initialTrends) }
+        val preloadedRival = repository.loadRivalLeague()
+        _uiState.update {
+            it.copy(
+                dashboardTrends = initialTrends,
+                rivalLeague = preloadedRival ?: it.rivalLeague
+            )
+        }
         coreSimulationViewModel.syncFromLeagueState(_uiState.value)
         loadPersistedLeague()
     }
@@ -328,7 +344,7 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 val background = try { CommissionerBackground.valueOf(saved.commissionerBackground) } catch (e: Exception) { CommissionerBackground.MARKETING_MAVEN }
                 val phase = try { SeasonPhase.valueOf(saved.seasonPhase) } catch (e: Exception) { SeasonPhase.REGULAR_SEASON }
                 val broadcastPlatform = try { BroadcastPlatform.valueOf(saved.activeBroadcastPlatform) } catch (e: Exception) { BroadcastPlatform.LINEAR_CABLE }
-                val broadcast = BroadcastContract(
+                val baseBroadcast = BroadcastContract(
                     id = "saved_deal",
                     partnerName = saved.activeBroadcastName,
                     platform = broadcastPlatform,
@@ -336,12 +352,26 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                     yearsRemaining = saved.activeBroadcastYearsRemaining,
                     reachMultiplier = 1.4
                 )
+                val extCba = repository.loadLaborCbaExtendedState()
                 val union = LaborUnionAgreement(
                     unionSatisfaction = saved.unionSatisfaction,
                     strikeRisk = saved.strikeRisk,
                     playerRevenueSharePct = saved.playerRevenueSharePct,
                     salaryCapType = try { SalaryCapType.valueOf(saved.salaryCapType) } catch (e: Exception) { SalaryCapType.SOFT_CAP_LUXURY_TAX },
-                    salaryCapMillions = saved.salaryCapMillions
+                    salaryCapMillions = saved.salaryCapMillions,
+                    cbaYearsRemaining = extCba?.cbaYearsRemaining ?: 3,
+                    isLockoutActive = extCba?.isLockoutActive ?: false,
+                    lockoutWeeksLost = extCba?.lockoutWeeksLost ?: 0,
+                    lastLockoutSeasonYear = extCba?.lastLockoutSeasonYear ?: 0,
+                    negotiatedRosterRule = extCba?.negotiatedRosterRule ?: RosterSizeRule.STANDARD_15,
+                    mandatoryPrivateCharterFlights = extCba?.mandatoryPrivateCharterFlights ?: true,
+                    maxBackToBackGamesLimit = extCba?.maxBackToBackGamesLimit ?: true,
+                    independentConcussionProtocol = extCba?.independentConcussionProtocol ?: true,
+                    advancedHybridTurfMandate = extCba?.advancedHybridTurfMandate ?: false,
+                    postCareerTransitionFundMillions = extCba?.postCareerTransitionFundMillions ?: 5L,
+                    fiveStarHotelSingleRooms = extCba?.fiveStarHotelSingleRooms ?: true,
+                    minPlayerSalaryK = extCba?.minPlayerSalaryK ?: 650L,
+                    playerHealthWelfareMillions = extCba?.playerHealthWelfareMillions ?: 15L
                 )
                 val franchises = repository.deserializeFranchises(saved.franchisesJson, saved.currentYear)
                 val cities = repository.deserializeCities(saved.citiesJson)
@@ -387,6 +417,15 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                     seasonYear = saved.currentYear
                 )
                 val syncedFranchises = minorSync.updatedFranchises
+                val (restoredBroadcast, restoredBiddingSession) = repository.applyLoadedBroadcastExclusivity(
+                    baseContract = baseBroadcast,
+                    bidders = InitialLeagueData.getNetworkBidders(),
+                    teamCount = syncedFranchises.size,
+                    playerRevenueSharePct = union.playerRevenueSharePct,
+                    fanbaseMillions = syncedFranchises.sumOf { it.fanBaseMillions }.coerceAtLeast(10.0),
+                    currentYear = saved.currentYear
+                )
+                val savedTrends = repository.loadDashboardTrends()
                 if (persistRequestSeq.get() > 0L) return@launch
                 _uiState.update {
                     val baseWithSavedSettings = repository.loadLeagueSettings(it.ruleBook) ?: it.ruleBook
@@ -422,7 +461,9 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                         competitiveParityScore = saved.competitiveParityScore,
                         unionAgreement = union,
                         ruleBook = restoredRuleBook,
-                        activeBroadcast = broadcast,
+                        activeBroadcast = restoredBroadcast,
+                        broadcastBiddingSession = restoredBiddingSession ?: it.broadcastBiddingSession,
+                        dashboardTrends = if (savedTrends.isNotEmpty()) savedTrends else it.dashboardTrends,
                         franchises = syncedFranchises,
                         cities = cities,
                         campaigns = campaigns,
@@ -465,7 +506,17 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                             jobSecurityLegacyState = JobSecurityLegacyEngine.recalculateLiveSecurity(
                                 loadedSec,
                                 perfInput
-                            )
+                            ),
+                            rivalLeague = repository.loadRivalLeague()
+                                ?: RivalLeagueEngine.createDefaultRivalLeague(sport),
+                            stadiumDealState = repository.loadStadiumDealState() ?: it.stadiumDealState,
+                            fanSentimentState = repository.loadFanSentimentState()
+                                ?: FanSentimentEngine.createInitialState(
+                                    sportType = sport,
+                                    leagueName = saved.leagueName,
+                                    franchises = syncedFranchises,
+                                    seasonYear = saved.currentYear
+                                )
                         )
                     }
                 }
@@ -508,7 +559,17 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                     ).let { updated ->
                         val perfInput = updated.toPerformanceInput()
                         updated.copy(
-                            jobSecurityLegacyState = JobSecurityLegacyEngine.createInitialState(perfInput)
+                            jobSecurityLegacyState = JobSecurityLegacyEngine.createInitialState(perfInput),
+                            rivalLeague = repository.loadRivalLeague()
+                                ?: RivalLeagueEngine.createDefaultRivalLeague(stateNow.sportType),
+                            stadiumDealState = repository.loadStadiumDealState() ?: it.stadiumDealState,
+                            fanSentimentState = repository.loadFanSentimentState()
+                                ?: FanSentimentEngine.createInitialState(
+                                    sportType = stateNow.sportType,
+                                    leagueName = stateNow.leagueName,
+                                    franchises = franchises,
+                                    seasonYear = stateNow.currentYear
+                                )
                         )
                     }
                 }
@@ -539,6 +600,12 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         repository.saveCrisisState(snapshotNow.crisisState)
         repository.saveSeasonScheduleState(snapshotNow.seasonScheduleState)
         repository.saveJobSecurityLegacyState(snapshotNow.jobSecurityLegacyState)
+        repository.saveRivalLeague(snapshotNow.rivalLeague)
+        repository.saveStadiumDealState(snapshotNow.stadiumDealState)
+        repository.saveFanSentimentState(snapshotNow.fanSentimentState)
+        repository.saveDashboardTrends(snapshotNow.dashboardTrends)
+        repository.saveLaborCbaExtendedState(snapshotNow.unionAgreement)
+        repository.saveBroadcastExclusivityState(snapshotNow.activeBroadcast, snapshotNow.broadcastBiddingSession)
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
             persistMutex.withLock {
                 if (requestSeq < persistRequestSeq.get()) return@withLock
@@ -571,9 +638,6 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 repository.saveAllStarRedesignState(s.allStarRedesignState)
                 repository.saveOfficiatingState(s.officiatingState)
                 repository.saveRuleCommitteeState(s.ruleCommitteeState)
-                repository.saveDisciplinaryState(s.disciplinaryState)
-                repository.saveCrisisState(s.crisisState)
-                repository.saveJobSecurityLegacyState(s.jobSecurityLegacyState)
             }
         }
     }
@@ -1098,6 +1162,25 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
         notifyFinancialMilestones(state, _uiState.value)
+        val crisisCasualDelta = when {
+            resolution.fanbaseDeltaMillions >= 0.3 -> 4
+            resolution.fanbaseDeltaMillions <= -0.3 -> -4
+            resolution.ownerApprovalDelta >= 5 && resolution.integrityDelta <= -3 -> -2
+            else -> 1
+        }
+        val crisisDieHardDelta = when {
+            resolution.integrityDelta >= 4 -> 4
+            resolution.integrityDelta <= -4 -> -5
+            resolution.fanbaseDeltaMillions <= -0.3 -> -3
+            else -> 1
+        }
+        recordFanReaction(
+            category = FanDecisionCategory.CRISIS_RULING,
+            decisionTitle = dilemma.choices[choiceIndex].label,
+            decisionSummary = resolution.headline,
+            casualDelta = crisisCasualDelta,
+            dieHardDelta = crisisDieHardDelta
+        )
         refreshJobSecurity(resolution.headline)
         recordDashboardTrend("Crisis S${dilemma.stageNumber}", "crisis_${dilemma.nodeId}_w${state.currentWeek}")
         persistCurrentState()
@@ -1229,6 +1312,15 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
         notifyFinancialMilestones(state, _uiState.value)
+        recordFanReaction(
+            category = FanDecisionCategory.STADIUM_RELOCATION,
+            decisionTitle = "${team.nickname} Relocation to ${targetCity.name}",
+            decisionSummary = "${team.teamFullName} approved to relocate to ${targetCity.name}.",
+            casualDelta = 2,
+            dieHardDelta = -6,
+            franchiseName = updatedTeam.teamFullName,
+            cityName = targetCity.name
+        )
         recordDashboardTrend("Reloc", "reloc_${targetCity.id}")
         persistCurrentState()
     }
@@ -1481,6 +1573,66 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         return newRequest
     }
 
+    fun buildExpansionArena(cityId: String, tier: ExpansionArenaTier): Pair<Boolean, String> {
+        val state = _uiState.value
+        val city = state.cities.find { it.id == cityId }
+            ?: return false to "Expansion market not found."
+        if (city.hasFranchise) {
+            return false to "${city.name} already hosts an active league franchise."
+        }
+        if (state.cashReservesMillions < tier.buildCostMillions) {
+            return false to "Insufficient league cash reserves (\$${state.cashReservesMillions}M available vs \$${tier.buildCostMillions}M needed)."
+        }
+
+        val updatedCity = city.copy(
+            arenaName = "${city.name} ${tier.displayName}",
+            arenaCapacity = tier.capacity,
+            arenaReadinessStatus = tier.readinessSummary,
+            localSponsorDepthMillions = city.localSponsorDepthMillions + tier.sponsorBoostMillions,
+            hasBuiltExpansionArena = true,
+            arenaBuildCostSpentMillions = tier.buildCostMillions,
+            expansionArenaTierName = tier.displayName
+        )
+        val updatedCities = state.cities.map { if (it.id == cityId) updatedCity else it }
+        val updatedRequests = state.pendingExpansionRequests.map { req ->
+            if (req.city.id != cityId) req else {
+                req.copy(
+                    city = updatedCity,
+                    arenaPlanSummary = "${updatedCity.arenaName} (${updatedCity.arenaCapacity} seats) — ${updatedCity.arenaReadinessStatus}.",
+                    impact = ExpansionRequestEngine.evaluateImpact(
+                        city = updatedCity,
+                        currentFranchises = state.franchises,
+                        activeBroadcast = state.activeBroadcast,
+                        activeSponsorship = state.activeSponsorship,
+                        currentMarketReachMillions = state.totalLeagueFanbaseMillions
+                    )
+                )
+            }
+        }
+        val headline = "EXPANSION ARENA FUNDED: Commissioned ${updatedCity.arenaName} (${tier.capacity} seats) in ${city.name} for \$${tier.buildCostMillions}M (+\$${tier.sponsorBoostMillions}M local sponsor depth)."
+        _uiState.update {
+            it.copy(
+                cashReservesMillions = it.cashReservesMillions - tier.buildCostMillions,
+                leagueValuationMillions = it.leagueValuationMillions + tier.buildCostMillions + 8L,
+                cities = updatedCities,
+                pendingExpansionRequests = updatedRequests,
+                recentNews = (listOf(headline) + it.recentNews).take(20)
+            )
+        }
+        notifyFinancialMilestones(state, _uiState.value)
+        recordFanReaction(
+            category = FanDecisionCategory.EXPANSION_TRADE,
+            decisionTitle = "${city.name} ${tier.displayName} Groundbreaking",
+            decisionSummary = headline,
+            casualDelta = 4,
+            dieHardDelta = 2,
+            cityName = city.name
+        )
+        recordDashboardTrend("Arena", "arena_${city.id}_${tier.name}")
+        persistCurrentState()
+        return true to "Built ${updatedCity.arenaName} in ${city.name} (${tier.capacity} seats)."
+    }
+
     // --- EXPANSION MARKET POOL MANAGEMENT (CAP: 10 OPEN CANDIDATES) ---
     fun getOpenExpansionCandidates(): List<MarketCity> =
         _uiState.value.cities.filter { !it.hasFranchise }
@@ -1576,11 +1728,13 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
 
     fun updateFranchiseTicketPrice(franchiseId: String, newPrice: Int) {
         val clampedPrice = newPrice.coerceIn(20, 250)
+        val beforeTeam = _uiState.value.franchises.find { it.id == franchiseId } ?: return
+        val oldPrice = beforeTeam.ticketPrice
+        val reactionDelta = FanLoyaltyEngine.evaluateTicketPriceReaction(beforeTeam, oldPrice, clampedPrice)
         _uiState.update { state ->
-            var reactionHeadline = "COMMERCIAL NOTICE: ${state.franchises.find { it.id == franchiseId }?.nickname} ticket price updated to \$${clampedPrice}/seat."
+            var reactionHeadline = "COMMERCIAL NOTICE: ${beforeTeam.nickname} ticket price updated to \$${clampedPrice}/seat."
             val updated = state.franchises.map { team ->
                 if (team.id == franchiseId) {
-                    val reactionDelta = FanLoyaltyEngine.evaluateTicketPriceReaction(team, team.ticketPrice, clampedPrice)
                     val newLoyalty = (team.fanLoyalty + reactionDelta).coerceIn(10, 100)
                     reactionHeadline = when {
                         reactionDelta <= -3 -> "FAN PRICING BACKLASH: ${team.teamFullName} hike to \$${clampedPrice}/seat triggers outrage ($reactionDelta loyalty -> $newLoyalty/100)."
@@ -1601,6 +1755,20 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             state.copy(
                 franchises = updated,
                 recentNews = (listOf(reactionHeadline) + state.recentNews).take(20)
+            )
+        }
+        if (clampedPrice != oldPrice) {
+            val priceDiff = clampedPrice - oldPrice
+            val casualD = if (priceDiff > 0) -(priceDiff / 6).coerceIn(1, 6) else ((-priceDiff) / 6).coerceIn(1, 6)
+            val dieHardD = if (priceDiff > 0) -(priceDiff / 10).coerceIn(1, 4) else ((-priceDiff) / 10).coerceIn(1, 3)
+            recordFanReaction(
+                category = FanDecisionCategory.TICKET_PRICING,
+                decisionTitle = "${beforeTeam.nickname} Tickets Set to \$$clampedPrice",
+                decisionSummary = "Gate price moved from \$$oldPrice to \$$clampedPrice/seat in ${beforeTeam.cityName}.",
+                casualDelta = casualD,
+                dieHardDelta = dieHardD,
+                franchiseName = beforeTeam.teamFullName,
+                cityName = beforeTeam.cityName
             )
         }
         persistCurrentState()
@@ -2732,14 +2900,92 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             currentFanbaseMillions = state.totalLeagueFanbaseMillions,
             currentYear = state.currentYear
         )
+        val exclusivityJustExpired = !state.broadcastBiddingSession.exclusivityExpired && nextSession.exclusivityExpired
         val roundHeadline = nextSession.lastEscalationSummary
         _uiState.update {
+            val updatedBroadcast = if (exclusivityJustExpired) {
+                it.activeBroadcast.copy(
+                    hasExclusivity = false,
+                    exclusivityLostPenaltyPct = BroadcastBiddingEngine.EXPIRY_REVENUE_PENALTY_PCT
+                )
+            } else {
+                it.activeBroadcast
+            }
+            val updatedFanbase = if (exclusivityJustExpired) {
+                (Math.round(it.totalLeagueFanbaseMillions * 0.96 * 10.0) / 10.0).coerceAtLeast(1.0)
+            } else {
+                it.totalLeagueFanbaseMillions
+            }
             it.copy(
+                activeBroadcast = updatedBroadcast,
+                totalLeagueFanbaseMillions = updatedFanbase,
                 broadcastBiddingSession = nextSession,
                 recentNews = if (roundHeadline != null) (listOf("BROADCAST AUCTION: $roundHeadline") + it.recentNews).take(20) else it.recentNews
             )
         }
+        if (exclusivityJustExpired) {
+            recordDashboardTrend("TV Expiry", "tv_exp_${state.currentWeek}")
+        }
+        persistCurrentState()
         return nextSession
+    }
+
+    fun triggerPeriodicBroadcastBidNow(): PeriodicBroadcastTickResult {
+        val state = _uiState.value
+        val baseSession = if (state.broadcastBiddingSession.offers.isEmpty()) {
+            BroadcastBiddingEngine.createInitialSession(
+                bidders = InitialLeagueData.getNetworkBidders(),
+                currentContract = state.activeBroadcast,
+                teamCount = state.franchises.size,
+                playerRevenueSharePct = state.unionAgreement.playerRevenueSharePct,
+                currentFanbaseMillions = state.totalLeagueFanbaseMillions,
+                currentYear = state.currentYear
+            )
+        } else {
+            state.broadcastBiddingSession
+        }
+        val tickResult = BroadcastBiddingEngine.receivePeriodicRivalBid(
+            session = baseSession,
+            currentContract = state.activeBroadcast,
+            teamCount = state.franchises.size,
+            playerRevenueSharePct = state.unionAgreement.playerRevenueSharePct,
+            currentFanbaseMillions = state.totalLeagueFanbaseMillions,
+            currentYear = state.currentYear,
+            weekNumber = state.currentWeek
+        )
+        _uiState.update {
+            val updatedBroadcast = if (tickResult.exclusivityJustExpired) {
+                it.activeBroadcast.copy(
+                    hasExclusivity = false,
+                    exclusivityLostPenaltyPct = BroadcastBiddingEngine.EXPIRY_REVENUE_PENALTY_PCT
+                )
+            } else {
+                it.activeBroadcast
+            }
+            val updatedFanbase = if (tickResult.exclusivityJustExpired) {
+                (Math.round(it.totalLeagueFanbaseMillions * 0.96 * 10.0) / 10.0).coerceAtLeast(1.0)
+            } else {
+                it.totalLeagueFanbaseMillions
+            }
+            it.copy(
+                activeBroadcast = updatedBroadcast,
+                totalLeagueFanbaseMillions = updatedFanbase,
+                broadcastBiddingSession = tickResult.updatedSession,
+                recentNews = if (tickResult.headline != null) {
+                    (listOf(tickResult.headline) + it.recentNews).take(20)
+                } else {
+                    it.recentNews
+                }
+            )
+        }
+        if (tickResult.exclusivityJustExpired) {
+            refreshJobSecurity("Broadcast exclusivity expired — non-exclusive penalty triggered.")
+            recordDashboardTrend("TV Expiry", "tv_exp_${state.currentWeek}")
+        } else if (tickResult.headline != null) {
+            recordDashboardTrend("TV Bid", "tv_bid_${state.currentWeek}_${tickResult.updatedSession.periodicBidsReceivedCount}")
+        }
+        persistCurrentState()
+        return tickResult
     }
 
     fun updateBroadcastOfferStructure(
@@ -2791,10 +3037,12 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             },
             annualPayoutMillions = offer.annualPayoutMillions,
             yearsRemaining = offer.termYears,
-            reachMultiplier = offer.bidder.reachMultiplier,
+            reachMultiplier = BroadcastBiddingEngine.effectiveReachForOffer(offer),
             bonusPerPlayoffGameMillions = offer.playoffBonusPerGameMillions,
             upfrontSigningBonusMillions = offer.lumpSumBonusMillions,
-            networkScope = offer.bidder.scope
+            networkScope = offer.bidder.scope,
+            hasExclusivity = !offer.isExclusivityExpired,
+            exclusivityLostPenaltyPct = if (offer.isExclusivityExpired) BroadcastBiddingEngine.EXPIRY_REVENUE_PENALTY_PCT else 0
         )
         val reachGain = offer.impact.projectedFanReachGrowthMillions
         signNegotiatedBroadcastContract(
@@ -2802,10 +3050,10 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             lumpSumBonusMillions = offer.lumpSumBonusMillions
         )
         _uiState.update { next ->
-            val updatedFanbase = Math.round((next.totalLeagueFanbaseMillions + reachGain) * 10.0) / 10.0
+            val updatedFanbase = (Math.round((next.totalLeagueFanbaseMillions + reachGain) * 10.0) / 10.0).coerceAtLeast(1.0)
             val refreshedSession = BroadcastBiddingEngine.createInitialSession(
                 bidders = InitialLeagueData.getNetworkBidders(),
-                currentContract = contract,
+                currentContract = next.activeBroadcast,
                 teamCount = next.franchises.size,
                 playerRevenueSharePct = next.unionAgreement.playerRevenueSharePct,
                 currentFanbaseMillions = updatedFanbase,
@@ -2816,16 +3064,35 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 broadcastBiddingSession = refreshedSession
             )
         }
+        val (cDelta, dDelta) = when (offer.bidder.scope) {
+            NetworkScope.FREE_TO_AIR -> 5 to 2
+            NetworkScope.GLOBAL_STREAMING -> 4 to -1
+            NetworkScope.REGIONAL_RSN -> 1 to 3
+            else -> 2 to 1
+        }
+        recordFanReaction(
+            category = FanDecisionCategory.MARKETING_BROADCAST,
+            decisionTitle = "${offer.bidder.name} TV Deal Signed",
+            decisionSummary = "Inked \$${_uiState.value.activeBroadcast.annualPayoutMillions}M/yr ${offer.bidder.scope.label} package.",
+            casualDelta = cDelta,
+            dieHardDelta = dDelta
+        )
         persistCurrentState()
         return true
     }
 
     // Broadcast Negotiation
     fun negotiateBroadcast(deal: BroadcastContract) {
-        _uiState.update {
-            it.copy(
-                activeBroadcast = deal,
-                recentNews = listOf("BROADCAST DEAL SIGNED: Inked multi-year agreement with ${deal.partnerName} for \$${deal.annualPayoutMillions}M/yr!") + it.recentNews
+        _uiState.update { state ->
+            val permBoost = state.rivalLeague.permanentTvRevenueBoostMillions.coerceAtLeast(0L)
+            val effectiveDeal = if (permBoost > 0L) {
+                deal.copy(annualPayoutMillions = deal.annualPayoutMillions + permBoost)
+            } else {
+                deal
+            }
+            state.copy(
+                activeBroadcast = effectiveDeal,
+                recentNews = listOf("BROADCAST DEAL SIGNED: Inked multi-year agreement with ${effectiveDeal.partnerName} for \$${effectiveDeal.annualPayoutMillions}M/yr!") + state.recentNews
             )
         }
         persistCurrentState()
@@ -2836,18 +3103,24 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         lumpSumBonusMillions: Long
     ) {
         val state = _uiState.value
+        val permBoost = state.rivalLeague.permanentTvRevenueBoostMillions.coerceAtLeast(0L)
+        val effectiveContract = if (permBoost > 0L) {
+            contract.copy(annualPayoutMillions = contract.annualPayoutMillions + permBoost)
+        } else {
+            contract
+        }
         val newCash = state.cashReservesMillions + lumpSumBonusMillions
-        val termStabilityBonus = ((contract.yearsRemaining - 2).coerceAtLeast(0) * 6L)
-        val newValuation = state.leagueValuationMillions + (contract.annualPayoutMillions / 2) + (lumpSumBonusMillions * 2) + termStabilityBonus
+        val termStabilityBonus = ((effectiveContract.yearsRemaining - 2).coerceAtLeast(0) * 6L)
+        val newValuation = state.leagueValuationMillions + (effectiveContract.annualPayoutMillions / 2) + (lumpSumBonusMillions * 2) + termStabilityBonus
 
         val bonusSnapshot = FinancialSnapshot(
             periodLabel = "Contract",
             weekNumber = state.currentWeek,
-            broadcastRevenue = contract.annualPayoutMillions * 0.15f,
+            broadcastRevenue = effectiveContract.annualPayoutMillions * 0.15f,
             sponsorshipRevenue = 0f,
             expansionFeeRevenue = lumpSumBonusMillions.toFloat(),
             luxuryTaxRevenue = 0f,
-            totalRevenue = (contract.annualPayoutMillions * 0.15f) + lumpSumBonusMillions.toFloat(),
+            totalRevenue = (effectiveContract.annualPayoutMillions * 0.15f) + lumpSumBonusMillions.toFloat(),
             operationsExpense = 1.0f,
             marketingExpense = 1.0f,
             welfareAndGrantsExpense = 0f,
@@ -2857,11 +3130,12 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             valuation = newValuation.toFloat()
         )
         val updatedSnapshots = (state.financialSnapshots + bonusSnapshot).takeLast(24)
-        val headline = "LANDMARK BROADCAST DEAL: Signed ${contract.yearsRemaining}-year contract with ${contract.partnerName} for \$${contract.annualPayoutMillions}M/yr + \$${lumpSumBonusMillions}M upfront lump-sum!"
+        val boostTag = if (permBoost > 0L) " (includes +\$${permBoost}M/yr Rival Absorption escalator)" else ""
+        val headline = "LANDMARK BROADCAST DEAL: Signed ${effectiveContract.yearsRemaining}-year contract with ${effectiveContract.partnerName} for \$${effectiveContract.annualPayoutMillions}M/yr$boostTag + \$${lumpSumBonusMillions}M upfront lump-sum!"
 
         _uiState.update {
             it.copy(
-                activeBroadcast = contract,
+                activeBroadcast = effectiveContract,
                 cashReservesMillions = newCash,
                 leagueValuationMillions = newValuation,
                 financialSnapshots = updatedSnapshots,
@@ -2871,7 +3145,7 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         }
         notifyFinancialMilestones(state, _uiState.value)
         refreshJobSecurity(headline)
-        recordDashboardTrend("TV Deal", "tv_${contract.id}")
+        recordDashboardTrend("TV Deal", "tv_${effectiveContract.id}")
         persistCurrentState()
     }
 
@@ -2999,15 +3273,43 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         val newStrikeRisk = (currentUnion.strikeRisk + choice.projectedStrikeRiskDelta).coerceIn(2, 95)
         val newRevenueShare = (currentUnion.playerRevenueSharePct + choice.projectedRevenueShareDeltaPct).coerceIn(45, 58)
         val newCbaYears = choice.projectedCbaYearsSet ?: currentUnion.cbaYearsRemaining
+        val newSalaryCapMillions = choice.requestedSalaryCapMillions ?: currentUnion.salaryCapMillions
+        val newSalaryCapType = choice.requestedSalaryCapType ?: currentUnion.salaryCapType
+        val newRosterRule = choice.requestedRosterSizeRule ?: currentUnion.negotiatedRosterRule
+        val newLockoutActive = when {
+            choice.clearsLockout -> false
+            choice.activatesLockoutOnReject && (newStrikeRisk >= 55 || newCbaYears <= 0 || currentUnion.isLockoutActive) -> true
+            else -> currentUnion.isLockoutActive
+        }
+        val newLastLockoutYear = if (newLockoutActive && !currentUnion.isLockoutActive) {
+            state.currentYear
+        } else {
+            currentUnion.lastLockoutSeasonYear
+        }
 
         val updatedUnion = currentUnion.copy(
             unionSatisfaction = newSatisfaction,
             strikeRisk = newStrikeRisk,
             playerRevenueSharePct = newRevenueShare,
+            salaryCapMillions = newSalaryCapMillions,
+            salaryCapType = newSalaryCapType,
+            negotiatedRosterRule = newRosterRule,
             cbaYearsRemaining = newCbaYears,
+            isLockoutActive = newLockoutActive,
+            lastLockoutSeasonYear = newLastLockoutYear,
             mandatoryPrivateCharterFlights = currentUnion.mandatoryPrivateCharterFlights || choice.enactsCharterFlights,
             maxBackToBackGamesLimit = currentUnion.maxBackToBackGamesLimit || choice.enactsBackToBackLimit
         )
+
+        val updatedRules = if (choice.requestedSalaryCapType != null) {
+            state.ruleBook.rules.map { rule ->
+                if (rule.id == "rule_salary_cap") {
+                    rule.copy(isEnacted = newSalaryCapType != SalaryCapType.FREE_MARKET)
+                } else rule
+            }
+        } else {
+            state.ruleBook.rules
+        }
 
         val reassessedTrigger = coreSimulationViewModel.reassessTriggersAfterUnionAction(
             updatedAgreement = updatedUnion,
@@ -3018,7 +3320,12 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         val cashSign = if (choice.projectedCashImpactMillions >= 0L) "+" else "-"
         val cashLabel = "$cashSign\$${kotlin.math.abs(choice.projectedCashImpactMillions)}M Cash"
         val moraleSign = if (choice.projectedFanMoraleDelta >= 0) "+" else ""
-        val headline = "LABOR RULING [${choice.stanceTag}]: ${choice.title} ($cashLabel, $moraleSign${choice.projectedFanMoraleDelta}% Fan Morale, Strike Risk $newStrikeRisk%)."
+        val lockoutNote = when {
+            currentUnion.isLockoutActive && !newLockoutActive -> " • OWNER LOCKOUT LIFTED!"
+            !currentUnion.isLockoutActive && newLockoutActive -> " • OWNER LOCKOUT ACTIVATED (GAMES SUSPENDED)!"
+            else -> ""
+        }
+        val headline = "LABOR RULING [${choice.stanceTag}]: ${choice.title} ($cashLabel, $moraleSign${choice.projectedFanMoraleDelta}% Fan Morale, Strike Risk $newStrikeRisk%)$lockoutNote"
 
         _uiState.update {
             it.copy(
@@ -3026,6 +3333,7 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 leagueValuationMillions = newValuation,
                 franchises = updatedFranchises,
                 unionAgreement = updatedUnion,
+                ruleBook = it.ruleBook.copy(rules = updatedRules),
                 activeLaborTrigger = reassessedTrigger,
                 activeLaborNegotiationOverlay = null,
                 showLaborUnionScreen = if (choice.opensCbaTableAfter) true else it.showLaborUnionScreen,
@@ -3034,6 +3342,13 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         }
         coreSimulationViewModel.syncFromLeagueState(_uiState.value)
         notifyFinancialMilestones(state, _uiState.value)
+        recordFanReaction(
+            category = FanDecisionCategory.LABOR_CBA,
+            decisionTitle = choice.title,
+            decisionSummary = headline,
+            casualDelta = choice.projectedFanMoraleDelta.coerceIn(-6, 6),
+            dieHardDelta = choice.projectedFanLoyaltyDelta.coerceIn(-6, 6)
+        )
         refreshJobSecurity(headline)
         recordDashboardTrend("Labor", "labor_${choice.id}")
         persistCurrentState()
@@ -3052,7 +3367,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             salaryCapMillions = salaryCapMillions,
             playerHealthWelfareMillions = healthFundMillions,
             unionSatisfaction = newSatisfaction,
-            strikeRisk = newStrikeRisk
+            strikeRisk = newStrikeRisk,
+            isLockoutActive = if (newStrikeRisk < 55) false else state.unionAgreement.isLockoutActive
         )
         val reassessedTrigger = coreSimulationViewModel.reassessTriggersAfterUnionAction(
             updatedAgreement = updatedAgreement,
@@ -3092,7 +3408,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         concussionProtocol: Boolean,
         hybridTurfMandate: Boolean,
         transitionFundMillions: Long,
-        fiveStarHotels: Boolean
+        fiveStarHotels: Boolean,
+        rosterSizeRule: RosterSizeRule = RosterSizeRule.STANDARD_15
     ): BoardVoteResult {
         val state = _uiState.value
         val candidateAgreement = state.unionAgreement.copy(
@@ -3106,7 +3423,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             independentConcussionProtocol = concussionProtocol,
             advancedHybridTurfMandate = hybridTurfMandate,
             postCareerTransitionFundMillions = transitionFundMillions,
-            fiveStarHotelSingleRooms = fiveStarHotels
+            fiveStarHotelSingleRooms = fiveStarHotels,
+            negotiatedRosterRule = rosterSizeRule
         )
         return OwnerGovernanceEngine.evaluateCbaVote(
             franchises = state.franchises,
@@ -3128,7 +3446,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         hybridTurfMandate: Boolean,
         transitionFundMillions: Long,
         fiveStarHotels: Boolean,
-        forceCommissionerOverride: Boolean = false
+        forceCommissionerOverride: Boolean = false,
+        rosterSizeRule: RosterSizeRule = RosterSizeRule.STANDARD_15
     ): BoardVoteResult {
         val state = _uiState.value
         val proposed = state.unionAgreement.copy(
@@ -3142,7 +3461,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             independentConcussionProtocol = concussionProtocol,
             advancedHybridTurfMandate = hybridTurfMandate,
             postCareerTransitionFundMillions = transitionFundMillions,
-            fiveStarHotelSingleRooms = fiveStarHotels
+            fiveStarHotelSingleRooms = fiveStarHotels,
+            negotiatedRosterRule = rosterSizeRule
         )
         val rawVote = OwnerGovernanceEngine.evaluateCbaVote(
             franchises = state.franchises,
@@ -3165,7 +3485,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                     hybridTurfMandate = hybridTurfMandate,
                     transitionFundMillions = transitionFundMillions,
                     fiveStarHotels = fiveStarHotels,
-                    forceCommissionerOverride = true
+                    forceCommissionerOverride = true,
+                    rosterSizeRule = rosterSizeRule
                 )
             }
             val reactedFranchises = OwnerGovernanceEngine.applyApprovalReactions(state.franchises, rawVote)
@@ -3203,6 +3524,7 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             hybridTurfMandate = hybridTurfMandate,
             transitionFundMillions = transitionFundMillions,
             fiveStarHotels = fiveStarHotels,
+            rosterSizeRule = rosterSizeRule,
             recordedVote = finalVote,
             showVoteModal = true,
             closeUnionScreen = false
@@ -3221,7 +3543,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         concussionProtocol: Boolean,
         hybridTurfMandate: Boolean,
         transitionFundMillions: Long,
-        fiveStarHotels: Boolean
+        fiveStarHotels: Boolean,
+        rosterSizeRule: RosterSizeRule = RosterSizeRule.STANDARD_15
     ) {
         val state = _uiState.value
         val candidateAgreement = state.unionAgreement.copy(
@@ -3235,7 +3558,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             independentConcussionProtocol = concussionProtocol,
             advancedHybridTurfMandate = hybridTurfMandate,
             postCareerTransitionFundMillions = transitionFundMillions,
-            fiveStarHotelSingleRooms = fiveStarHotels
+            fiveStarHotelSingleRooms = fiveStarHotels,
+            negotiatedRosterRule = rosterSizeRule
         )
         val evaluated = OwnerGovernanceEngine.evaluateCbaVote(
             franchises = state.franchises,
@@ -3255,6 +3579,7 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             hybridTurfMandate = hybridTurfMandate,
             transitionFundMillions = transitionFundMillions,
             fiveStarHotels = fiveStarHotels,
+            rosterSizeRule = rosterSizeRule,
             recordedVote = evaluated,
             showVoteModal = false,
             closeUnionScreen = true
@@ -3273,11 +3598,13 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         hybridTurfMandate: Boolean,
         transitionFundMillions: Long,
         fiveStarHotels: Boolean,
+        rosterSizeRule: RosterSizeRule = RosterSizeRule.STANDARD_15,
         recordedVote: BoardVoteResult,
         showVoteModal: Boolean,
         closeUnionScreen: Boolean
     ) {
         val state = _uiState.value
+        val wasLockoutActive = state.unionAgreement.isLockoutActive
 
         var satisfaction = 50
         satisfaction += (revenueSharePct - 48) * 5
@@ -3287,6 +3614,11 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         if (concussionProtocol) satisfaction += 8
         if (hybridTurfMandate) satisfaction += 6
         if (fiveStarHotels) satisfaction += 5
+        satisfaction += when (rosterSizeRule) {
+            RosterSizeRule.EXPANDED_18 -> 7
+            RosterSizeRule.STANDARD_15 -> 0
+            RosterSizeRule.COMPACT_12 -> -4
+        }
         satisfaction += ((playerHealthWelfareMillions - 10) * 1.5).toInt()
         satisfaction += (transitionFundMillions * 1.5).toInt()
 
@@ -3298,6 +3630,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         if (mandatoryPrivateCharters) ownerApprovalDelta -= 4
         if (hybridTurfMandate) ownerApprovalDelta -= 4
         if (salaryCapType == SalaryCapType.HARD_CAP) ownerApprovalDelta += 8
+        if (rosterSizeRule == RosterSizeRule.COMPACT_12) ownerApprovalDelta += 4
+        if (rosterSizeRule == RosterSizeRule.EXPANDED_18) ownerApprovalDelta -= 3
         if (recordedVote.enactedViaCommissionerOverride) ownerApprovalDelta -= 8
 
         val reactedFranchises = OwnerGovernanceEngine.applyApprovalReactions(state.franchises, recordedVote)
@@ -3318,7 +3652,9 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             advancedHybridTurfMandate = hybridTurfMandate,
             postCareerTransitionFundMillions = transitionFundMillions,
             fiveStarHotelSingleRooms = fiveStarHotels,
-            cbaYearsRemaining = 5
+            negotiatedRosterRule = rosterSizeRule,
+            cbaYearsRemaining = 5,
+            isLockoutActive = false
         )
 
         val updatedRules = state.ruleBook.rules.map { rule ->
@@ -3338,7 +3674,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             "Board Vote ${recordedVote.marginSummary}"
         }
-        val headline = "HISTORIC CBA ACCORD [$voteBadge]: 5-year labor peace ratified! Salary Cap set to \$${salaryCapMillions}M (${salaryCapType.displayName}). Strike threat averted ($finalStrikeRisk%)."
+        val lockoutLiftedTag = if (wasLockoutActive) " Owner lockout lifted — games resume!" else ""
+        val headline = "HISTORIC CBA ACCORD [$voteBadge]: 5-year labor peace ratified! Salary Cap set to \$${salaryCapMillions}M (${salaryCapType.displayName} • ${rosterSizeRule.displayName}). Strike threat averted ($finalStrikeRisk%).$lockoutLiftedTag"
 
         val reassessedTrigger = coreSimulationViewModel.reassessTriggersAfterUnionAction(
             updatedAgreement = updatedAgreement,
@@ -3363,6 +3700,7 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
         refreshJobSecurity(headline)
+        recordDashboardTrend("CBA", "cba_${state.currentYear}_${state.currentWeek}")
         persistCurrentState()
     }
 
@@ -3602,6 +3940,15 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 recentNews = (listOf(headline) + it.recentNews).take(20)
             )
         }
+        val casualGateDelta = if (deltaDollars > 0) -4 else 4
+        val dieHardGateDelta = if (deltaDollars > 0) -2 else 2
+        recordFanReaction(
+            category = FanDecisionCategory.TICKET_PRICING,
+            decisionTitle = "League Ticket Adjustment ($sign/seat)",
+            decisionSummary = headline,
+            casualDelta = casualGateDelta,
+            dieHardDelta = dieHardGateDelta
+        )
         recordDashboardTrend("Gate $sign", "gate_${state.currentWeek}_${deltaDollars}")
         persistCurrentState()
     }
@@ -4677,6 +5024,13 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 recentNews = (listOf("MARKETING CAMPAIGN LAUNCHED: '${camp.title}' deployed targeting ${camp.targetSegment} — boosting fan loyalty league-wide!") + it.recentNews).take(20)
             )
         }
+        recordFanReaction(
+            category = FanDecisionCategory.MARKETING_BROADCAST,
+            decisionTitle = "League Promo: ${camp.title}",
+            decisionSummary = "Launched ${camp.title} targeting ${camp.targetSegment}.",
+            casualDelta = 4,
+            dieHardDelta = 2
+        )
         recordDashboardTrend("Promo", "camp_$campaignId")
         persistCurrentState()
     }
@@ -4704,6 +5058,15 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 recentNews = (listOf("FRANCHISE MARKETING BLITZ: ${team.teamFullName} launch '${campaignType.title}' (+${campaignType.immediateLoyaltyBoost} loyalty -> ${updatedTeam.fanLoyalty}/100)!") + it.recentNews).take(20)
             )
         }
+        recordFanReaction(
+            category = FanDecisionCategory.MARKETING_BROADCAST,
+            decisionTitle = "${team.nickname}: ${campaignType.title}",
+            decisionSummary = "${team.teamFullName} deployed ${campaignType.title}.",
+            casualDelta = 4,
+            dieHardDelta = 2,
+            franchiseName = team.teamFullName,
+            cityName = team.cityName
+        )
         recordDashboardTrend("Promo", "fcamp_$franchiseId")
         persistCurrentState()
         return true to "${campaignType.title} launched for ${team.teamFullName}! Loyalty surged to ${updatedTeam.fanLoyalty}/100."
@@ -4824,6 +5187,16 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 )
             ),
             showScheduleCalendarScreen = false,
+            rivalLeague = RivalLeagueEngine.createDefaultRivalLeague(sport),
+            showRivalWatchModal = false,
+            stadiumDealState = StadiumDealState(),
+            fanSentimentState = FanSentimentEngine.createInitialState(
+                sportType = sport,
+                leagueName = name,
+                franchises = initialFranchises,
+                seasonYear = 2026
+            ),
+            showFanSentimentScreen = false,
             recentNews = listOf(
                 "Commissioner assumes command of $name (${sport.displayName})! Positions ${sport.primaryPositionSummary} & ${sport.minorLeagueName} inaugurated."
             )
@@ -5350,6 +5723,13 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 recentNews = (listOf(news) + it.recentNews).take(20)
             )
         }
+        recordFanReaction(
+            category = FanDecisionCategory.OFFICIATING,
+            decisionTitle = choice.title,
+            decisionSummary = news,
+            casualDelta = if (choice.integrityDelta >= 2) 2 else -1,
+            dieHardDelta = choice.integrityDelta.coerceIn(-4, 5)
+        )
         refreshJobSecurity(news)
         recordDashboardTrend("RefFix", "ref_res_${choice.id}")
         persistCurrentState()
@@ -5443,6 +5823,14 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 actionLabel = "Committee",
                 targetRoute = DashboardSnackbarRoute.RULE_COMMITTEE
             )
+        )
+        val isSpectacleRule = enacted.scoringDeltaPerTeam > 0.5 || enacted.closeGameSwingPct > 0 || enacted.convertDrawsToShootout
+        recordFanReaction(
+            category = FanDecisionCategory.RULE_CHANGE,
+            decisionTitle = "Enacted: ${enacted.title}",
+            decisionSummary = newsHeadline,
+            casualDelta = if (isSpectacleRule) 4 else 1,
+            dieHardDelta = if (isSpectacleRule) -2 else enacted.integrityDelta.coerceIn(1, 4)
         )
         recordDashboardTrend("RuleLaw", "rc_enact_${enacted.id}")
         persistCurrentState()
@@ -5578,6 +5966,14 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 )
             )
         }
+        recordFanReaction(
+            category = FanDecisionCategory.DISCIPLINARY,
+            decisionTitle = "${target.caseCode}: ${suspensionGames}G / \$${fineThousands}K",
+            decisionSummary = outcome.headline,
+            casualDelta = outcome.fanAppealDelta.coerceIn(-4, 4),
+            dieHardDelta = outcome.integrityDelta.coerceIn(-4, 5),
+            franchiseName = target.franchiseName
+        )
         recordDashboardTrend("Discipline", "disc_ruling_${target.caseCode}")
         refreshJobSecurity(outcome.headline)
         persistCurrentState()
@@ -5952,6 +6348,13 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 recentNews = (listOf(headline) + it.recentNews).take(20)
             )
         }
+        recordFanReaction(
+            category = FanDecisionCategory.ALL_STAR_SCHEDULE,
+            decisionTitle = "${plan.targetYear} Schedule (${plan.holidayShowcaseCount} Holidays, ${plan.internationalGameCount} Intl)",
+            decisionSummary = headline,
+            casualDelta = (if (plan.holidayShowcaseCount > 0) 3 else 1) + (if (plan.internationalGameCount > 0) 2 else 0),
+            dieHardDelta = if (plan.internationalGameCount > 2) -2 else 2
+        )
         coreSimulationViewModel.syncFromLeagueState(_uiState.value)
         persistCurrentState()
         return finalVote
@@ -6163,5 +6566,524 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         persistCurrentState()
         return outcome
     }
+
+    // ==================== RIVAL LEAGUE & RIVAL WATCH ====================
+
+    fun openRivalWatchModal(open: Boolean = true) {
+        _uiState.update { it.copy(showRivalWatchModal = open) }
+    }
+
+    fun performRivalWatchAction(action: RivalWatchAction): Pair<Boolean, String> {
+        val currentState = _uiState.value
+        val outcome = RivalLeagueEngine.applyRivalWatchAction(
+            rivalLeague = currentState.rivalLeague,
+            action = action,
+            currentCashMillions = currentState.cashReservesMillions,
+            freeAgentPool = currentState.freeAgentPool
+        )
+        if (!outcome.success) {
+            _uiState.update {
+                it.copy(
+                    rivalLeague = it.rivalLeague.copy(lastActionFeedback = outcome.message)
+                )
+            }
+            return false to outcome.message
+        }
+
+        val newCash = (currentState.cashReservesMillions + outcome.cashDeltaMillions).coerceAtLeast(0L)
+        val newOwnerApproval = (currentState.ownerApprovalRating + outcome.ownerApprovalDelta).coerceIn(15, 100)
+        val nextSat = (currentState.unionAgreement.unionSatisfaction + outcome.unionSatisfactionDelta).coerceIn(10, 100)
+        val nextStrike = (currentState.unionAgreement.strikeRisk + outcome.strikeRiskDelta).coerceIn(0, 95)
+        val updatedUnion = currentState.unionAgreement.copy(
+            unionSatisfaction = nextSat,
+            strikeRisk = nextStrike
+        )
+        val newFanbase = ((currentState.totalLeagueFanbaseMillions + outcome.fanbaseDeltaMillions) * 100.0)
+            .let { kotlin.math.round(it) / 100.0 }
+            .coerceAtLeast(1.0)
+        val updatedFranchises = currentState.franchises.map { team ->
+            team.copy(
+                ownership = team.ownership.copy(
+                    ownerApproval = (team.ownership.ownerApproval + outcome.ownerApprovalDelta).coerceIn(15, 100)
+                )
+            )
+        }
+        val headline = outcome.headline ?: outcome.message
+
+        _uiState.update {
+            it.copy(
+                cashReservesMillions = newCash,
+                ownerApprovalRating = newOwnerApproval,
+                unionAgreement = updatedUnion,
+                totalLeagueFanbaseMillions = newFanbase,
+                franchises = updatedFranchises,
+                rivalLeague = outcome.updatedRivalLeague,
+                freeAgentPool = outcome.updatedFreeAgentPool,
+                recentNews = (listOf(headline) + it.recentNews).take(20)
+            )
+        }
+
+        if (outcome.didFoldRivalLeague) {
+            coreSimulationViewModel.emitDashboardSnackbar(
+                DashboardSnackbarEvent(
+                    id = "snack_rival_fold_${currentState.currentYear}_${currentState.currentWeek}",
+                    type = DashboardAlertType.SEASON_MILESTONE,
+                    severity = DashboardAlertSeverity.MILESTONE,
+                    message = headline,
+                    actionLabel = "Rival Watch",
+                    targetRoute = DashboardSnackbarRoute.RIVAL_WATCH
+                )
+            )
+        }
+
+        notifyFinancialMilestones(currentState, _uiState.value)
+        val rivalFanPair = when (action) {
+            RivalWatchAction.COUNTER_PROGRAM -> 4 to 1
+            RivalWatchAction.BLACKLIST_DEFECTORS -> -3 to 3
+            RivalWatchAction.PROPOSE_MERGER -> 5 to -2
+        }
+        recordFanReaction(
+            category = FanDecisionCategory.RIVAL_LEAGUE,
+            decisionTitle = "Rival Watch: ${action.title}",
+            decisionSummary = headline,
+            casualDelta = rivalFanPair.first,
+            dieHardDelta = rivalFanPair.second
+        )
+        refreshJobSecurity(headline)
+        recordDashboardTrend("W${currentState.currentWeek}", "rival_${action.name.lowercase()}")
+        coreSimulationViewModel.syncFromLeagueState(_uiState.value)
+        persistCurrentState()
+        return true to outcome.message
+    }
+
+    fun toggleRivalAbsorptionCandidate(candidateId: String) {
+        _uiState.update { state ->
+            state.copy(
+                rivalLeague = RivalLeagueEngine.toggleAbsorptionCandidate(
+                    rivalLeague = state.rivalLeague,
+                    candidateId = candidateId
+                )
+            )
+        }
+        coreSimulationViewModel.syncFromLeagueState(_uiState.value)
+        persistCurrentState()
+    }
+
+    fun resolveRivalAbsorptionNegotiation(acceptAbsorption: Boolean): RivalAbsorptionOutcome {
+        val currentState = _uiState.value
+        val outcome = RivalLeagueEngine.resolveAbsorptionNegotiation(
+            rivalLeague = currentState.rivalLeague,
+            existingFranchises = currentState.franchises,
+            existingCities = currentState.cities,
+            ruleBook = currentState.ruleBook,
+            freeAgentPool = currentState.freeAgentPool,
+            sportType = currentState.sportType,
+            seasonYear = currentState.currentYear,
+            acceptAbsorption = acceptAbsorption
+        )
+        if (!outcome.success) return outcome
+
+        if (!outcome.absorbed) {
+            val newOwnerApproval = (currentState.ownerApprovalRating + outcome.ownerApprovalDelta).coerceIn(15, 100)
+            val updatedFranchises = currentState.franchises.map { team ->
+                team.copy(
+                    ownership = team.ownership.copy(
+                        ownerApproval = (team.ownership.ownerApproval + outcome.ownerApprovalDelta).coerceIn(15, 100)
+                    )
+                )
+            }
+            _uiState.update {
+                it.copy(
+                    ownerApprovalRating = newOwnerApproval,
+                    franchises = updatedFranchises,
+                    rivalLeague = outcome.updatedRivalLeague,
+                    showRivalWatchModal = false,
+                    recentNews = (listOf(outcome.headline) + it.recentNews).take(20)
+                )
+            }
+            recordFanReaction(
+                category = FanDecisionCategory.RIVAL_LEAGUE,
+                decisionTitle = "Rejected Rival League Merger",
+                decisionSummary = outcome.headline,
+                casualDelta = -2,
+                dieHardDelta = 2
+            )
+            refreshJobSecurity(outcome.headline)
+            recordDashboardTrend("Rival", "rival_reject_${currentState.currentYear}")
+            coreSimulationViewModel.syncFromLeagueState(_uiState.value)
+            persistCurrentState()
+            return outcome
+        }
+
+        val combinedFranchises = currentState.franchises + outcome.absorbedFranchises
+        val adaptedPlayoffRules = PlayoffStructureEngine.adaptRulesForLeagueStructure(
+            currentRules = currentState.ruleBook.playoffRules,
+            franchises = combinedFranchises,
+            enabledConferences = currentState.ruleBook.enabledConferences
+        )
+        val syncedRivalries = RivalryEngine.syncRivalriesForLeagueTopology(
+            combinedFranchises,
+            outcome.updatedCities,
+            currentState.rivalries,
+            currentState.currentYear
+        )
+        val minorSync = MinorLeagueEngine.syncAffiliatesWithParentLeague(
+            franchises = combinedFranchises,
+            currentMinorState = currentState.minorLeagueState,
+            sportType = currentState.sportType,
+            seasonYear = currentState.currentYear
+        )
+        val finalFranchises = minorSync.updatedFranchises.map { team ->
+            team.copy(
+                ownership = team.ownership.copy(
+                    ownerApproval = (team.ownership.ownerApproval + outcome.ownerApprovalDelta).coerceIn(15, 100)
+                )
+            )
+        }
+        val newOwnerApproval = (currentState.ownerApprovalRating + outcome.ownerApprovalDelta).coerceIn(15, 100)
+        val updatedBroadcast = currentState.activeBroadcast.copy(
+            annualPayoutMillions = currentState.activeBroadcast.annualPayoutMillions + outcome.permanentTvBoostMillions
+        )
+        val updatedFanbase = Math.round((currentState.totalLeagueFanbaseMillions + outcome.fanbaseDeltaMillions) * 10.0) / 10.0
+        val absorbedCityIds = outcome.absorbedFranchises.map { it.cityId }.toSet()
+        val remainingPending = currentState.pendingExpansionRequests.filterNot { it.city.id in absorbedCityIds }
+        val recalculatedPending = ExpansionRequestEngine.recalculateImpacts(
+            requests = remainingPending,
+            franchises = finalFranchises,
+            activeBroadcast = updatedBroadcast,
+            activeSponsorship = currentState.activeSponsorship,
+            currentMarketReachMillions = updatedFanbase
+        )
+        val updatedUpcomingPlan = currentState.seasonScheduleState.upcomingPlan?.let { existingPlan ->
+            ScheduleCalendarEngine.generateFullSeasonSchedule(
+                targetYear = existingPlan.targetYear,
+                regularSeasonWeeks = currentState.ruleBook.regularSeasonWeeks,
+                franchises = finalFranchises,
+                rivalries = syncedRivalries,
+                cities = outcome.updatedCities,
+                sportType = currentState.sportType
+            )
+        }
+        val newValuation = currentState.leagueValuationMillions +
+            (outcome.permanentTvBoostMillions * 2L) +
+            (outcome.absorbedFranchises.size * 35L)
+
+        _uiState.update {
+            it.copy(
+                ownerApprovalRating = newOwnerApproval,
+                leagueValuationMillions = newValuation,
+                totalLeagueFanbaseMillions = updatedFanbase,
+                activeBroadcast = updatedBroadcast,
+                franchises = finalFranchises,
+                minorLeagueState = minorSync.minorState,
+                cities = outcome.updatedCities,
+                rivalries = syncedRivalries,
+                freeAgentPool = outcome.updatedFreeAgentPool,
+                pendingExpansionRequests = recalculatedPending,
+                ruleBook = it.ruleBook.copy(playoffRules = adaptedPlayoffRules),
+                seasonScheduleState = it.seasonScheduleState.copy(upcomingPlan = updatedUpcomingPlan),
+                rivalLeague = outcome.updatedRivalLeague,
+                showRivalWatchModal = false,
+                recentNews = (listOf(outcome.headline) + minorSync.headlines + it.recentNews).take(20)
+            )
+        }
+
+        coreSimulationViewModel.emitDashboardSnackbar(
+            DashboardSnackbarEvent(
+                id = "snack_rival_absorb_${currentState.currentYear}_${outcome.absorbedFranchises.size}",
+                type = DashboardAlertType.SEASON_MILESTONE,
+                severity = DashboardAlertSeverity.MILESTONE,
+                message = outcome.headline,
+                actionLabel = "Finances",
+                targetRoute = DashboardSnackbarRoute.FINANCES
+            )
+        )
+        notifyFinancialMilestones(currentState, _uiState.value)
+        recordFanReaction(
+            category = FanDecisionCategory.RIVAL_LEAGUE,
+            decisionTitle = "Absorbed ${outcome.absorbedFranchises.size} Rival Franchises",
+            decisionSummary = outcome.headline,
+            casualDelta = 5,
+            dieHardDelta = -2
+        )
+        refreshJobSecurity(outcome.headline)
+        recordDashboardTrend("Merger", "rival_absorb_${currentState.currentYear}")
+        coreSimulationViewModel.syncFromLeagueState(_uiState.value)
+        persistCurrentState()
+        return outcome
+    }
+
+    // ==================== STADIUM DEALS, ULTIMATUMS & RELOCATION VOTES ====================
+
+    fun resolveStadiumUltimatumChoice(
+        choice: StadiumUltimatumChoice,
+        forceRelocationRoll: Boolean? = null
+    ): StadiumUltimatumOutcome {
+        val currentState = _uiState.value
+        val ultimatumTarget = currentState.stadiumDealState.activeUltimatum
+        val outcome = StadiumDealEngine.resolveStadiumUltimatum(
+            currentState = currentState.stadiumDealState,
+            franchises = currentState.franchises,
+            cities = currentState.cities,
+            currentCashMillions = currentState.cashReservesMillions,
+            choice = choice,
+            forceRelocationRoll = forceRelocationRoll
+        )
+        if (!outcome.success) {
+            _uiState.update {
+                it.copy(
+                    stadiumDealState = it.stadiumDealState.copy(lastDecisionSummary = outcome.message)
+                )
+            }
+            return outcome
+        }
+
+        val newCash = (currentState.cashReservesMillions + outcome.cashDeltaMillions).coerceAtLeast(0L)
+        val newValuation = (currentState.leagueValuationMillions + outcome.valuationDeltaMillions).coerceAtLeast(100L)
+        val newOwnerApproval = (currentState.ownerApprovalRating + outcome.ownerApprovalDelta).coerceIn(15, 100)
+        val headline = outcome.headline ?: outcome.message
+
+        _uiState.update {
+            it.copy(
+                cashReservesMillions = newCash,
+                leagueValuationMillions = newValuation,
+                ownerApprovalRating = newOwnerApproval,
+                franchises = outcome.updatedFranchises,
+                stadiumDealState = outcome.updatedStadiumDealState,
+                recentNews = (listOf(headline) + it.recentNews).take(20)
+            )
+        }
+
+        if (outcome.triggeredRelocationThreat) {
+            coreSimulationViewModel.emitDashboardSnackbar(
+                DashboardSnackbarEvent(
+                    id = "snack_reloc_threat_${currentState.currentYear}_${currentState.currentWeek}",
+                    type = DashboardAlertType.CRISIS_ALERT,
+                    severity = DashboardAlertSeverity.CRITICAL,
+                    message = headline,
+                    actionLabel = "Vote",
+                    targetRoute = DashboardSnackbarRoute.STADIUM_ULTIMATUM
+                )
+            )
+        }
+
+        notifyFinancialMilestones(currentState, _uiState.value)
+        val (stadiumCasual, stadiumDieHard) = when (choice) {
+            StadiumUltimatumChoice.LOBBY_PUBLIC_TAX_FUNDING -> 1 to -6
+            StadiumUltimatumChoice.FORCE_OWNER_PRIVATE_FUNDING -> 2 to 5
+            StadiumUltimatumChoice.SUBSIDIZE_WITH_LEAGUE_FUNDS -> 2 to 3
+        }
+        recordFanReaction(
+            category = FanDecisionCategory.STADIUM_RELOCATION,
+            decisionTitle = choice.title,
+            decisionSummary = headline,
+            casualDelta = stadiumCasual,
+            dieHardDelta = stadiumDieHard,
+            franchiseName = ultimatumTarget?.franchiseName ?: currentState.leagueName,
+            cityName = ultimatumTarget?.cityName ?: "Metro"
+        )
+        refreshJobSecurity(headline)
+        recordDashboardTrend("W${currentState.currentWeek}", "stadium_${choice.name.lowercase()}")
+        coreSimulationViewModel.syncFromLeagueState(_uiState.value)
+        persistCurrentState()
+        return outcome
+    }
+
+    fun selectRelocationVoteCity(cityId: String) {
+        _uiState.update { state ->
+            val currentVote = state.stadiumDealState.activeRelocationVote ?: return@update state
+            if (currentVote.cityDeals.none { it.cityId == cityId }) return@update state
+            state.copy(
+                stadiumDealState = state.stadiumDealState.copy(
+                    activeRelocationVote = currentVote.copy(selectedCityId = cityId)
+                )
+            )
+        }
+        persistCurrentState()
+    }
+
+    fun resolveRelocationVote(
+        approve: Boolean,
+        selectedCityIdOverride: String? = null
+    ): RelocationVoteOutcome {
+        val currentState = _uiState.value
+        val activeVote = currentState.stadiumDealState.activeRelocationVote
+        val outcome = StadiumDealEngine.resolveRelocationVote(
+            currentState = currentState.stadiumDealState,
+            franchises = currentState.franchises,
+            cities = currentState.cities,
+            ruleBook = currentState.ruleBook,
+            approve = approve,
+            selectedCityIdOverride = selectedCityIdOverride
+        )
+        if (!outcome.success) return outcome
+
+        val newCash = (currentState.cashReservesMillions + outcome.cashDeltaMillions).coerceAtLeast(0L)
+        val newValuation = (currentState.leagueValuationMillions + outcome.valuationDeltaMillions).coerceAtLeast(100L)
+        val newOwnerApproval = (currentState.ownerApprovalRating + outcome.ownerApprovalDelta).coerceIn(15, 100)
+
+        val finalFranchises: List<Franchise>
+        val finalMinorState: MinorLeagueState
+        val finalMatches: List<GameMatch>
+        val finalRivalries: List<TeamRivalry>
+        val finalPlayoffRules: PlayoffRules
+
+        if (outcome.approved && outcome.relocatedTeamId != null) {
+            finalPlayoffRules = PlayoffStructureEngine.adaptRulesForLeagueStructure(
+                currentRules = currentState.ruleBook.playoffRules,
+                franchises = outcome.updatedFranchises,
+                enabledConferences = currentState.ruleBook.enabledConferences
+            )
+            finalRivalries = RivalryEngine.syncRivalriesForLeagueTopology(
+                outcome.updatedFranchises,
+                outcome.updatedCities,
+                currentState.rivalries,
+                currentState.currentYear
+            )
+            finalMatches = RivalryEngine.annotateMatchesWithRivalries(
+                currentState.currentWeekMatches,
+                outcome.updatedFranchises,
+                finalRivalries,
+                outcome.updatedCities
+            )
+            val minorSync = MinorLeagueEngine.syncAffiliatesWithParentLeague(
+                franchises = outcome.updatedFranchises,
+                currentMinorState = currentState.minorLeagueState,
+                sportType = currentState.sportType,
+                seasonYear = currentState.currentYear
+            )
+            finalFranchises = minorSync.updatedFranchises
+            finalMinorState = minorSync.minorState
+        } else {
+            finalPlayoffRules = currentState.ruleBook.playoffRules
+            finalRivalries = currentState.rivalries
+            finalMatches = currentState.currentWeekMatches
+            finalFranchises = outcome.updatedFranchises
+            finalMinorState = currentState.minorLeagueState
+        }
+
+        _uiState.update {
+            it.copy(
+                cashReservesMillions = newCash,
+                leagueValuationMillions = newValuation,
+                ownerApprovalRating = newOwnerApproval,
+                franchises = finalFranchises,
+                minorLeagueState = finalMinorState,
+                cities = outcome.updatedCities,
+                currentWeekMatches = finalMatches,
+                rivalries = finalRivalries,
+                ruleBook = it.ruleBook.copy(playoffRules = finalPlayoffRules),
+                stadiumDealState = outcome.updatedStadiumDealState,
+                recentNews = (listOf(outcome.headline) + it.recentNews).take(20)
+            )
+        }
+
+        notifyFinancialMilestones(currentState, _uiState.value)
+        val resolvedDestCity = outcome.destinationCityName ?: "New Market"
+        recordFanReaction(
+            category = FanDecisionCategory.STADIUM_RELOCATION,
+            decisionTitle = if (outcome.approved) {
+                "Relocation Approved to $resolvedDestCity"
+            } else {
+                "Relocation Vetoed (${activeVote?.currentCityName ?: "Home City"} Kept)"
+            },
+            decisionSummary = outcome.headline,
+            casualDelta = if (outcome.approved) 2 else -1,
+            dieHardDelta = if (outcome.approved) -7 else 6,
+            franchiseName = activeVote?.franchiseName ?: currentState.leagueName,
+            cityName = if (outcome.approved) resolvedDestCity else (activeVote?.currentCityName ?: "Metro")
+        )
+        refreshJobSecurity(outcome.headline)
+        recordDashboardTrend("RelocVote", if (approve) "reloc_approved" else "reloc_vetoed")
+        coreSimulationViewModel.syncFromLeagueState(_uiState.value)
+        persistCurrentState()
+        return outcome
+    }
+
+    // ==================== FAN SENTIMENT & MEDIA PULSE ====================
+
+    fun openFanSentimentScreen(open: Boolean = true) {
+        _uiState.update { it.copy(showFanSentimentScreen = open) }
+    }
+
+    private fun recordFanReaction(
+        category: FanDecisionCategory,
+        decisionTitle: String,
+        decisionSummary: String,
+        casualDelta: Int,
+        dieHardDelta: Int,
+        franchiseName: String? = null,
+        cityName: String? = null
+    ) {
+        _uiState.update { state ->
+            val fallbackTeam = state.franchises.firstOrNull()
+            val updatedSentiment = FanSentimentEngine.recordDecisionReaction(
+                currentState = state.fanSentimentState,
+                category = category,
+                decisionTitle = decisionTitle,
+                decisionSummary = decisionSummary,
+                casualDelta = casualDelta,
+                dieHardDelta = dieHardDelta,
+                franchiseName = franchiseName ?: fallbackTeam?.teamFullName ?: state.leagueName,
+                cityName = cityName ?: fallbackTeam?.cityName ?: "Metro",
+                sportType = state.sportType,
+                seasonYear = state.currentYear,
+                weekNumber = state.currentWeek,
+                seedOffset = state.currentWeek + state.fanSentimentState.decisionReactions.size
+            )
+            state.copy(fanSentimentState = updatedSentiment)
+        }
+    }
+
+    fun hostFanPulseInitiative(focusSegment: FanSegmentType): Pair<Boolean, String> {
+        val state = _uiState.value
+        val costMillions = 3L
+        if (state.cashReservesMillions < costMillions) {
+            return false to "Insufficient league reserves (\$${costMillions}M required for media blitz)."
+        }
+
+        val (title, summary, casualDelta, dieHardDelta) = when (focusSegment) {
+            FanSegmentType.CASUAL -> listOf(
+                "Viral Highlight & Family Access Initiative",
+                "Commissioned weekend stream giveaways, cheaper upper-bowl flex passes, and player mic'd-up showcases.",
+                5,
+                -1
+            )
+            FanSegmentType.DIE_HARD -> listOf(
+                "Season-Ticket Heritage & Purist Town Hall",
+                "Hosted direct commissioner Q&A with loyal supporter clubs, locking anti-relocation pledges and rivalry protections.",
+                -1,
+                5
+            )
+        }
+        val casualD = casualDelta as Int
+        val dieHardD = dieHardDelta as Int
+        val updatedFranchises = state.franchises.map { team ->
+            team.copy(
+                fanMorale = (team.fanMorale + if (focusSegment == FanSegmentType.CASUAL) 2 else 1).coerceIn(20, 99),
+                fanLoyalty = (team.fanLoyalty + if (focusSegment == FanSegmentType.DIE_HARD) 2 else 0).coerceIn(15, 100)
+            )
+        }
+        val headline = "FAN PULSE TOWN HALL: ${title as String} deployed (\$${costMillions}M)."
+        _uiState.update {
+            it.copy(
+                cashReservesMillions = it.cashReservesMillions - costMillions,
+                franchises = updatedFranchises,
+                recentNews = (listOf(headline) + it.recentNews).take(20)
+            )
+        }
+        recordFanReaction(
+            category = FanDecisionCategory.TOWN_HALL,
+            decisionTitle = title,
+            decisionSummary = summary as String,
+            casualDelta = casualD,
+            dieHardDelta = dieHardD
+        )
+        refreshJobSecurity(headline)
+        persistCurrentState()
+        return true to "$title enacted! Social feeds, talk radio, and print columns updated."
+    }
 }
+
+
 

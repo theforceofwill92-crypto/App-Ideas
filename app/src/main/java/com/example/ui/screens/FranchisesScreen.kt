@@ -770,18 +770,19 @@ fun FranchisesScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
+                                val needsStadium = franchise.stadiumAge > 25 && franchise.stadiumCondition < 50
                                 Text(
                                     text = "%,d Seats • \$${stmtPreview.franchiseValuationMillions}M Value".format(franchise.stadiumCapacity),
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
-                                    color = EmeraldAccent,
+                                    color = if (needsStadium) CrimsonAlert else EmeraldAccent,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "Std T${fac.stadiumTier} • Trn T${fac.trainingTier} • Ste T${fac.luxurySuitesTier}${if (fac.ongoingProjects.isNotEmpty()) " (${fac.ongoingProjects.size} Building)" else ""}",
+                                    text = "Age ${franchise.stadiumAge}y • ${franchise.stadiumCondition}% Cond • Std T${fac.stadiumTier} • Trn T${fac.trainingTier}${if (fac.ongoingProjects.isNotEmpty()) " (${fac.ongoingProjects.size} Building)" else ""}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (needsStadium) CrimsonAlert else MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 10.sp
                                 )
                             }
