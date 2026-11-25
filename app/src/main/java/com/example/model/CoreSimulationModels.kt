@@ -36,6 +36,7 @@ data class WeeklyRevenueBreakdown(
     val phaseLabel: String,
     val weeklyBroadcastRevenueMillions: Double,
     val weeklySponsorRevenueMillions: Double,
+    val weeklyNamingRightsRevenueMillions: Double = 0.0,
     val loyaltyGateShareMillions: Double,
     val rivalryGateShareMillions: Double,
     val luxuryTaxCollectedMillions: Long,

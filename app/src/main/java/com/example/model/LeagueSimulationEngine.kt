@@ -31,10 +31,13 @@ object LeagueSimulationEngine {
             ((100 - activeBroadcast.exclusivityLostPenaltyPct.coerceIn(0, 50)) / 100.0)
         }
         val weeklyBroadcastPayout = ((activeBroadcast.annualPayoutMillions / 16.0) * exclusivityMultiplier) + specialEventBonusMillions
-        val weeklySponsorRevenue = franchises.sumOf {
+        val weeklyNamingRightsRevenue = franchises.sumOf {
+            it.stadium.namingRightsRevenue.coerceAtLeast(0L).toDouble()
+        } / 16.0
+        val weeklySponsorRevenue = (franchises.sumOf {
             (it.localSponsorRevenueMillions + it.facilities.annualSuitePremiumMillions) *
                 FanLoyaltyEngine.sponsorLoyaltyMultiplier(it.fanLoyalty)
-        } / 16.0
+        } / 16.0) + weeklyNamingRightsRevenue
 
         val avgLoyalty = if (franchises.isNotEmpty()) franchises.map { it.fanLoyalty }.average() else 75.0
         val rawLoyaltyGateShare = (((avgLoyalty - 65.0) / 100.0) * franchises.size * 0.9).coerceAtLeast(0.0)
@@ -93,6 +96,7 @@ object LeagueSimulationEngine {
             phaseLabel = "Week $week Regular Season",
             weeklyBroadcastRevenueMillions = weeklyBroadcastPayout,
             weeklySponsorRevenueMillions = weeklySponsorRevenue,
+            weeklyNamingRightsRevenueMillions = weeklyNamingRightsRevenue,
             loyaltyGateShareMillions = rawLoyaltyGateShare,
             rivalryGateShareMillions = rawRivalryGateCut,
             luxuryTaxCollectedMillions = luxuryTaxCollected,
@@ -107,6 +111,50 @@ object LeagueSimulationEngine {
             netCashFlowMillions = netCashFlow,
             valuationDeltaMillions = valuationDelta,
             snapshot = snapshot
+        )
+    }
+
+    data class AnnualRevenueAndCapProjection(
+        val totalNamingRightsRevenueMillions: Long,
+        val annualLeagueRevenueMillions: Long,
+        val previousSalaryCapMillions: Long,
+        val salaryCapIncreaseMillions: Long,
+        val nextSalaryCapMillions: Long
+    )
+
+    fun calculateAnnualLeagueRevenueAndNextCap(
+        franchises: List<Franchise>,
+        activeBroadcast: BroadcastContract,
+        unionAgreement: LaborUnionAgreement
+    ): AnnualRevenueAndCapProjection {
+        val teamCount = franchises.size.coerceAtLeast(1)
+        val totalNamingRights = franchises.sumOf { it.stadium.namingRightsRevenue.coerceAtLeast(0L) }
+        val totalFranchiseAnnualRevenue = franchises.sumOf {
+            it.calculateFinancialStatement(activeBroadcast, teamCount).totalRevenueMillions
+        }.roundToLong()
+        val annualLeagueRevenue = totalFranchiseAnnualRevenue + (activeBroadcast.annualPayoutMillions * 0.15).roundToLong()
+
+        val namingRightsCapBoost = if (totalNamingRights > 0L) {
+            ((totalNamingRights.toDouble() / teamCount) * (unionAgreement.playerRevenueSharePct / 100.0))
+                .roundToLong()
+                .coerceAtLeast(1L)
+        } else 0L
+
+        val baseOrganicCapGrowth = if (unionAgreement.isLockoutActive) {
+            0L
+        } else {
+            ((activeBroadcast.annualPayoutMillions / teamCount) / 8L).coerceIn(1L, 4L)
+        }
+
+        val capIncrease = (baseOrganicCapGrowth + namingRightsCapBoost).coerceAtLeast(0L)
+        val nextCap = (unionAgreement.salaryCapMillions + capIncrease).coerceIn(60L, 260L)
+
+        return AnnualRevenueAndCapProjection(
+            totalNamingRightsRevenueMillions = totalNamingRights,
+            annualLeagueRevenueMillions = annualLeagueRevenue,
+            previousSalaryCapMillions = unionAgreement.salaryCapMillions,
+            salaryCapIncreaseMillions = (nextCap - unionAgreement.salaryCapMillions).coerceAtLeast(0L),
+            nextSalaryCapMillions = nextCap
         )
     }
 
@@ -127,7 +175,8 @@ object LeagueSimulationEngine {
             ((100 - activeBroadcast.exclusivityLostPenaltyPct.coerceIn(0, 50)) / 100.0)
         }
         val broadcastShare = (activeBroadcast.annualPayoutMillions / 16.0) * exclusivityMultiplier
-        val sponsorShare = franchises.sumOf { it.localSponsorRevenueMillions } / 16.0
+        val namingRightsShare = franchises.sumOf { it.stadium.namingRightsRevenue.coerceAtLeast(0L) } / 16.0
+        val sponsorShare = (franchises.sumOf { it.localSponsorRevenueMillions } / 16.0) + namingRightsShare
         val grossRevenue = playoffRivalryCut.coerceAtLeast(1L)
         val playerShareCost = (broadcastShare + sponsorShare) * (unionAgreement.playerRevenueSharePct / 100.0)
         val welfareCost = (unionAgreement.playerHealthWelfareMillions / 16.0).coerceAtLeast(0.9)
@@ -155,6 +204,7 @@ object LeagueSimulationEngine {
             phaseLabel = roundLabel,
             weeklyBroadcastRevenueMillions = broadcastShare,
             weeklySponsorRevenueMillions = sponsorShare,
+            weeklyNamingRightsRevenueMillions = namingRightsShare,
             loyaltyGateShareMillions = 0.0,
             rivalryGateShareMillions = rivalryTicketBonusMillions * 0.25,
             luxuryTaxCollectedMillions = 0L,

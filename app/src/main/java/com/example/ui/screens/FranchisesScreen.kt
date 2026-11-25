@@ -34,6 +34,7 @@ import com.example.model.FranchiseIdentityEngine
 import com.example.model.FranchiseMarketingCampaignType
 import com.example.model.FreeAgencyEngine
 import com.example.model.MarketCity
+import com.example.model.TeamReputationEngine
 import com.example.model.calculateFinancialStatement
 import com.example.ui.components.FranchiseIdentityCustomizer
 import com.example.ui.components.ProgressBarWithLabel
@@ -594,6 +595,83 @@ fun FranchisesScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    // Team Reputation & Free-Agent Signing Appeal
+                    val rep = TeamReputationEngine.evaluateReputation(
+                        franchise = franchise,
+                        salaryCapMillions = uiState.unionAgreement.salaryCapMillions
+                    )
+                    val repAccent = Color(rep.tier.colorHex)
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, repAccent.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                            .testTag("card_team_reputation_${franchise.id}"),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = "TEAM REPUTATION • ${rep.score}/100",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Black,
+                                        color = repAccent
+                                    )
+                                    Surface(
+                                        color = repAccent.copy(alpha = 0.16f),
+                                        shape = RoundedCornerShape(6.dp),
+                                        modifier = Modifier.testTag("badge_team_reputation_${franchise.id}")
+                                    ) {
+                                        Text(
+                                            text = rep.tier.label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = repAccent,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "${rep.baseFreeAgentLikelihoodPct}% FA Appeal",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = repAccent
+                                )
+                            }
+                            Text(
+                                text = buildString {
+                                    append("${rep.relocationCount} Reloc • ${rep.payrollPctOfCap}% Cap Spend")
+                                    if (rep.reputationSalaryPremiumMillions > 0L) {
+                                        append(" • +\$${rep.reputationSalaryPremiumMillions}M FA Demand")
+                                    }
+                                    append(" — ${rep.summaryNote}")
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
                     // Lineup Readiness & Medical Depth Chart Status
                     val injCount = franchise.injuredPlayersCount
                     val holesCount = franchise.unresolvedStarterHolesCount
@@ -771,8 +849,9 @@ fun FranchisesScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 val needsStadium = franchise.stadiumAge > 25 && franchise.stadiumCondition < 50
+                                val stadiumDeal = franchise.stadium
                                 Text(
-                                    text = "%,d Seats • \$${stmtPreview.franchiseValuationMillions}M Value".format(franchise.stadiumCapacity),
+                                    text = "${"%,d".format(franchise.stadiumCapacity)} Seats • \$${stmtPreview.franchiseValuationMillions}M Value",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = if (needsStadium) CrimsonAlert else EmeraldAccent,
@@ -784,6 +863,19 @@ fun FranchisesScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (needsStadium) CrimsonAlert else MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 10.sp
+                                )
+                                Text(
+                                    text = if (stadiumDeal.hasActiveSponsor) {
+                                        "${stadiumDeal.sponsorName} • T${stadiumDeal.sponsorTier} (\$${stadiumDeal.namingRightsRevenue}M/yr, ${stadiumDeal.sponsorYearsLeft}y)"
+                                    } else {
+                                        "No Naming Sponsor"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (stadiumDeal.sponsorTier == 3) AmberAccent else if (stadiumDeal.hasActiveSponsor) CyanAccent else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             OutlinedButton(

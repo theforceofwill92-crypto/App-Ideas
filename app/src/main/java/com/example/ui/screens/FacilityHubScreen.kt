@@ -136,7 +136,7 @@ fun FacilityHubScreen(
                                 letterSpacing = 0.8.sp
                             )
                             Text(
-                                text = "%,d Total League Seats".format(totalLeagueSeats),
+                                text = "${"%,d".format(totalLeagueSeats)} Total League Seats",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -257,7 +257,7 @@ fun FacilityHubScreen(
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
                                         Text(
-                                            text = "%,d Seats • Age ${selectedTeam.stadiumAge}y • ${selectedTeam.stadiumCondition}% Cond • \$${fac.cumulativeInvestedMillions}M Invested".format(selectedTeam.stadiumCapacity),
+                                            text = "${"%,d".format(selectedTeam.stadiumCapacity)} Seats • Age ${selectedTeam.stadiumAge}y • ${selectedTeam.stadiumCondition}% Cond • \$${fac.cumulativeInvestedMillions}M Invested",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = if (selectedTeam.stadiumAge > 25 && selectedTeam.stadiumCondition < 50) CrimsonAlert else MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -344,6 +344,130 @@ fun FacilityHubScreen(
                                             color = GoldPrimary
                                         )
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Corporate Stadium Naming Rights Card
+                item {
+                    val stadiumDeal = selectedTeam.stadium
+                    val hasSponsor = stadiumDeal.hasActiveSponsor
+                    val tierColor = when (stadiumDeal.sponsorTier) {
+                        1 -> EmeraldAccent
+                        2 -> CyanAccent
+                        3 -> AmberAccent
+                        else -> GoldPrimary
+                    }
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("card_stadium_naming_rights_${selectedTeam.id}")
+                            .border(1.dp, tierColor.copy(alpha = 0.55f), RoundedCornerShape(16.dp)),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "STADIUM NAMING RIGHTS SPONSOR",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = tierColor,
+                                        fontWeight = FontWeight.Black,
+                                        letterSpacing = 0.7.sp
+                                    )
+                                    Text(
+                                        text = if (hasSponsor) {
+                                            stadiumDeal.sponsorName ?: "Corporate Partner"
+                                        } else {
+                                            "Vacant • Open for Naming Rights"
+                                        },
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Black,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                Surface(
+                                    color = tierColor.copy(alpha = 0.16f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, tierColor.copy(alpha = 0.5f))
+                                ) {
+                                    Text(
+                                        text = if (hasSponsor) "TIER ${stadiumDeal.sponsorTier}" else "NO SPONSOR",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Black,
+                                        color = tierColor,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            if (hasSponsor) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "+\$${stadiumDeal.namingRightsRevenue}M/yr Revenue • ${stadiumDeal.sponsorYearsLeft} yr(s) left",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = EmeraldAccent
+                                    )
+                                    Text(
+                                        text = if (stadiumDeal.sponsorTier == 3) "20% Scandal Risk" else "Scandal-Free",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (stadiumDeal.sponsorTier == 3) AmberAccent else CyanAccent
+                                    )
+                                }
+                                Text(
+                                    text = "Contributes directly to annual league revenue & expands next season's Salary Cap.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Text(
+                                    text = "No active arena sponsor. Solicit 3 procedural naming rights bids to boost franchise revenue and next season's Salary Cap.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Button(
+                                    onClick = { viewModel.openNamingRightsOfferForFranchise(selectedTeam.id) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = GoldPrimary,
+                                        contentColor = Color.Black
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("btn_open_naming_rights_offers")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Handshake,
+                                        contentDescription = "Open Naming Rights Offers",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Solicit Naming Rights Offers",
+                                        fontWeight = FontWeight.Black,
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
                                 }
                             }
                         }
@@ -671,7 +795,7 @@ private fun FacilityTrackCard(
                             )
                         }
                         val deliverables = buildList {
-                            if (nextSpec.seatingCapacityGain > 0) add("+%,d Seats".format(nextSpec.seatingCapacityGain))
+                            if (nextSpec.seatingCapacityGain > 0) add("+${"%,d".format(nextSpec.seatingCapacityGain)} Seats")
                             if (nextSpec.annualSponsorGainMillions > 0L) add("+\$${nextSpec.annualSponsorGainMillions}M/yr Commercial")
                             if (nextSpec.rosterOvrGain > 0) add("+${nextSpec.rosterOvrGain} OVR Conditioning & -10% Inj")
                             add("+\$${nextSpec.valuationBoostMillions}M Valuation")

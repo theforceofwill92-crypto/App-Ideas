@@ -403,6 +403,58 @@ fun FreeAgencyPoolScreen(
 
                             Spacer(modifier = Modifier.height(8.dp))
 
+                            val teamRep = remember(selectedTeam, capLimit) {
+                                TeamReputationEngine.evaluateReputation(selectedTeam, capLimit)
+                            }
+                            val repColor = Color(teamRep.tier.colorHex)
+                            Surface(
+                                color = repColor.copy(alpha = 0.12f),
+                                border = BorderStroke(1.dp, repColor.copy(alpha = 0.45f)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("card_fa_team_reputation")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Team Reputation: ${teamRep.tier.label} (${teamRep.score}/100)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Black,
+                                            color = repColor
+                                        )
+                                        Text(
+                                            text = "${teamRep.relocationCount} Reloc • ${teamRep.payrollPctOfCap}% Cap",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 10.sp
+                                        )
+                                    }
+                                    Text(
+                                        text = if (teamRep.reputationSalaryPremiumMillions > 0L) {
+                                            "FA Demand: +\$${teamRep.reputationSalaryPremiumMillions}M/yr premium • ${teamRep.summaryNote}"
+                                        } else {
+                                            teamRep.summaryNote
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 10.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -525,6 +577,15 @@ fun FreeAgencyPoolScreen(
                 }
                 val hasOpenSlot = (selectedNeed?.openRosterSlots ?: 0) > 0
                 val canSign = selectedTeam != null && hasOpenSlot && (projectedTerms?.isCapCompliant == true)
+                val signingOdds = selectedTeam?.let { team ->
+                    TeamReputationEngine.evaluateFreeAgentSigningOdds(
+                        freeAgent = agent,
+                        franchise = team,
+                        salaryCapMillions = uiState.unionAgreement.salaryCapMillions,
+                        offerSalaryMillions = projectedTerms?.salaryMillions ?: agent.askingSalaryMillions,
+                        isUrgentDepthNeed = (selectedNeed?.urgentHolesCount ?: 0) > 0
+                    )
+                }
 
                 Card(
                     modifier = Modifier
@@ -611,6 +672,48 @@ fun FreeAgencyPoolScreen(
                         }
 
                         Spacer(modifier = Modifier.height(10.dp))
+
+                        if (signingOdds != null) {
+                            val oddsAccent = when {
+                                signingOdds.likelihoodPct >= 72 -> EmeraldAccent
+                                signingOdds.likelihoodPct >= 45 -> AmberWarning
+                                else -> CrimsonAlert
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Surface(
+                                    color = oddsAccent.copy(alpha = 0.16f),
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier.testTag("fa_signing_odds_${agent.id}")
+                                ) {
+                                    Text(
+                                        text = "Sign Odds: ${signingOdds.likelihoodPct}%",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Black,
+                                        color = oddsAccent,
+                                        fontSize = 10.sp,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = signingOdds.driverSummary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("fa_reputation_note_${agent.id}")
+                                )
+                            }
+                        }
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),

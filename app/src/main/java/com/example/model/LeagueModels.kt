@@ -846,6 +846,16 @@ data class TradeBlockListing(
     val askingNote: String = ""
 )
 
+data class TeamStadium(
+    val sponsorName: String? = null,
+    val sponsorTier: Int = 0, // 0 = Vacant, 1 = Safe/Low Pay, 2 = Medium/Winning Record, 3 = Huge/High Scandal Risk
+    val sponsorYearsLeft: Int = 0,
+    val namingRightsRevenue: Long = 0L // Annual revenue in $M
+) {
+    val hasActiveSponsor: Boolean
+        get() = !sponsorName.isNullOrBlank() && sponsorTier in 1..3 && sponsorYearsLeft > 0
+}
+
 data class Franchise(
     val id: String,
     val cityId: String,
@@ -879,10 +889,18 @@ data class Franchise(
     val lastLoyaltyDrivers: FanLoyaltyDrivers = FanLoyaltyDrivers(),
     val facilities: FranchiseFacilities = FranchiseFacilities(),
     val stadiumAge: Int = 14,
-    val stadiumCondition: Int = 78
+    val stadiumCondition: Int = 78,
+    val stadium: TeamStadium = TeamStadium(),
+    val relocationCount: Int = 0,
+    val lowSpendingSeasons: Int = 0,
+    val reputationScore: Int = 78,
+    val lastReputationNote: String = "Balanced ownership investment and market stability."
 ) {
     val winPct: Double
         get() = if (wins + losses == 0) 0.500 else wins.toDouble() / (wins + losses)
+
+    val reputationTier: TeamReputationTier
+        get() = TeamReputationTier.fromScore(reputationScore)
 
     val loyaltyTier: FanLoyaltyTier
         get() = FanLoyaltyEngine.tierFor(fanLoyalty)
@@ -1919,6 +1937,7 @@ data class FranchiseFinancialStatement(
     val loyaltyMerchMultiplier: Double = 1.0,
     val loyaltySponsorMultiplier: Double = 1.0,
     val luxurySuiteRevenueMillions: Double = 0.0,
+    val namingRightsRevenueMillions: Double = 0.0,
     val franchiseValuationMillions: Long = 0L
 )
 
@@ -1940,14 +1959,15 @@ fun Franchise.calculateFinancialStatement(activeBroadcast: BroadcastContract, to
 
     val loyaltySponsorMult = FanLoyaltyEngine.sponsorLoyaltyMultiplier(fanLoyalty)
     val suitePremium = facilities.annualSuitePremiumMillions
-    val localSponsor = (localSponsorRevenueMillions.toDouble() + suitePremium) * loyaltySponsorMult
+    val namingRightsRev = stadium.namingRightsRevenue.coerceAtLeast(0L).toDouble()
+    val localSponsor = (localSponsorRevenueMillions.toDouble() + suitePremium) * loyaltySponsorMult + namingRightsRev
     val totalRevenue = ticketRevenue + merchandiseRevenue + broadcastRevenue + localSponsor
 
     // Baseline comparison against neutral 65 loyalty so UI & analytics quantify loyalty revenue impact
     val baseAttRate65 = FanLoyaltyEngine.computeAttendanceRate(this, loyaltyOverride = 65)
     val baseTicket65 = ((stadiumCapacity * baseAttRate65).toInt() * ticketPrice * homeGames) / 1_000_000.0 + rivalryTicketBonusMillions
     val baseMerch65 = (fanBaseMillions * 8.5 * (fanMorale / 100.0) * (rosterRating / 75.0) * merchMultiplier * FanLoyaltyEngine.merchandiseLoyaltyMultiplier(65)).coerceAtLeast(4.0)
-    val baseSponsor65 = (localSponsorRevenueMillions.toDouble() + suitePremium) * FanLoyaltyEngine.sponsorLoyaltyMultiplier(65)
+    val baseSponsor65 = (localSponsorRevenueMillions.toDouble() + suitePremium) * FanLoyaltyEngine.sponsorLoyaltyMultiplier(65) + namingRightsRev
     val baselineTotalRevenue = baseTicket65 + baseMerch65 + broadcastRevenue + baseSponsor65
     val loyaltyImpact = totalRevenue - baselineTotalRevenue
 
@@ -1956,7 +1976,8 @@ fun Franchise.calculateFinancialStatement(activeBroadcast: BroadcastContract, to
     val totalExpenses = payroll + opsExpense
     val netIncome = totalRevenue - totalExpenses
     val margin = if (totalRevenue > 0) (netIncome / totalRevenue) * 100.0 else 0.0
-    val valuationBreakdown = FacilityEngine.calculateValuationFromRevenue(this, totalRevenue)
+    val roundedTotalRevenue = Math.round(totalRevenue * 10.0) / 10.0
+    val valuationBreakdown = FacilityEngine.calculateValuationFromRevenue(this, roundedTotalRevenue)
 
     return FranchiseFinancialStatement(
         franchiseId = id,
@@ -1965,7 +1986,7 @@ fun Franchise.calculateFinancialStatement(activeBroadcast: BroadcastContract, to
         merchandiseRevenueMillions = Math.round(merchandiseRevenue * 10.0) / 10.0,
         broadcastRevenueMillions = Math.round(broadcastRevenue * 10.0) / 10.0,
         localSponsorRevenueMillions = Math.round(localSponsor * 10.0) / 10.0,
-        totalRevenueMillions = Math.round(totalRevenue * 10.0) / 10.0,
+        totalRevenueMillions = roundedTotalRevenue,
         payrollExpenseMillions = Math.round(payroll * 10.0) / 10.0,
         operationsExpenseMillions = Math.round(opsExpense * 10.0) / 10.0,
         totalExpensesMillions = Math.round(totalExpenses * 10.0) / 10.0,
@@ -1984,6 +2005,7 @@ fun Franchise.calculateFinancialStatement(activeBroadcast: BroadcastContract, to
         loyaltyMerchMultiplier = Math.round(loyaltyMerchMult * 100.0) / 100.0,
         loyaltySponsorMultiplier = Math.round(loyaltySponsorMult * 100.0) / 100.0,
         luxurySuiteRevenueMillions = Math.round((suitePremium * loyaltySponsorMult) * 10.0) / 10.0,
+        namingRightsRevenueMillions = Math.round(namingRightsRev * 10.0) / 10.0,
         franchiseValuationMillions = valuationBreakdown.totalValuationMillions
     )
 }

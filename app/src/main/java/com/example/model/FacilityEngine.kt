@@ -100,7 +100,8 @@ data class FranchiseValuationBreakdown(
 data class FacilityConstructionTickResult(
     val updatedFranchises: List<Franchise>,
     val headlines: List<String>,
-    val totalLeagueValuationGainMillions: Long
+    val totalLeagueValuationGainMillions: Long,
+    val rebuiltStadiumTeamIds: List<String> = emptyList()
 )
 
 object FacilityEngine {
@@ -229,10 +230,13 @@ object FacilityEngine {
             FacilityType.LUXURY_SUITES -> 6
             FacilityType.TRAINING_CENTER -> 0
         }
+        val isFlagshipRebuild = project.type == FacilityType.STADIUM_SEATING && project.targetTier >= 5
 
         return franchise.copy(
             stadiumCapacity = franchise.stadiumCapacity + project.seatingCapacityGain,
-            stadiumCondition = (franchise.stadiumCondition + conditionGain).coerceIn(0, 100),
+            stadiumAge = if (isFlagshipRebuild) 0 else franchise.stadiumAge,
+            stadiumCondition = if (isFlagshipRebuild) 100 else (franchise.stadiumCondition + conditionGain).coerceIn(0, 100),
+            stadium = if (isFlagshipRebuild) TeamStadium() else franchise.stadium,
             localSponsorRevenueMillions = franchise.localSponsorRevenueMillions + project.annualSponsorGainMillions,
             rosterRating = newRosterRating,
             fanLoyalty = newLoyalty,
@@ -246,6 +250,7 @@ object FacilityEngine {
         completeAllRemaining: Boolean = false
     ): FacilityConstructionTickResult {
         val headlines = mutableListOf<String>()
+        val rebuiltStadiumIds = mutableListOf<String>()
         var totalValGain = 0L
 
         val updated = franchises.map { team ->
@@ -257,6 +262,9 @@ object FacilityEngine {
                 val newRemaining = if (completeAllRemaining) 0 else (proj.remainingWeeks - weeksElapsed).coerceAtLeast(0)
                 if (newRemaining == 0) {
                     workingTeam = completeProjectImmediately(workingTeam, proj)
+                    if (proj.type == FacilityType.STADIUM_SEATING && proj.targetTier >= 5) {
+                        rebuiltStadiumIds.add(team.id)
+                    }
                     totalValGain += proj.valuationBoostMillions
                     val seatNote = if (proj.seatingCapacityGain > 0) " (+${proj.seatingCapacityGain} seats -> ${workingTeam.stadiumCapacity})" else ""
                     val sponsorNote = if (proj.annualSponsorGainMillions > 0) " (+\$${proj.annualSponsorGainMillions}M/yr suite revenue)" else ""
@@ -280,7 +288,8 @@ object FacilityEngine {
         return FacilityConstructionTickResult(
             updatedFranchises = updated,
             headlines = headlines,
-            totalLeagueValuationGainMillions = totalValGain
+            totalLeagueValuationGainMillions = totalValGain,
+            rebuiltStadiumTeamIds = rebuiltStadiumIds.distinct()
         )
     }
 

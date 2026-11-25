@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.example.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -16,6 +17,8 @@ class LeagueRepository(context: Context) {
     private val db = AppDatabase.getInstance(appContext)
 
     private val dao = db.leagueDao()
+    private val leagueStateDao = db.leagueStateDao()
+    private val revenueHistoryDao = db.leagueRevenueHistoryDao()
     private val faPrefs by lazy {
         appContext.getSharedPreferences("apex_free_agency_prefs", Context.MODE_PRIVATE)
     }
@@ -27,9 +30,107 @@ class LeagueRepository(context: Context) {
     }
 
     val leagueSaveFlow: Flow<LeagueSaveEntity?> = dao.getLeagueSaveFlow()
+    val leagueStateFlow: Flow<LeagueState?> = leagueStateDao.getLeagueStateFlow()
+    val fiveYearRevenueHistoryFlow: Flow<List<LeagueRevenueHistoryEntity>> =
+        revenueHistoryDao.getLastFiveYearsRevenueFlow().map { list ->
+            list.sortedBy { it.seasonYear }
+        }
 
     suspend fun loadLeague(): LeagueSaveEntity? = withContext(Dispatchers.IO) {
         dao.getLeagueSave()
+    }
+
+    suspend fun loadLeagueState(): LeagueState? = withContext(Dispatchers.IO) {
+        leagueStateDao.getLeagueState()
+    }
+
+    suspend fun saveLeagueState(state: LeagueState) = withContext(Dispatchers.IO) {
+        leagueStateDao.upsertLeagueState(state)
+    }
+
+    suspend fun loadFiveYearRevenueHistory(): List<LeagueRevenueHistoryEntity> = withContext(Dispatchers.IO) {
+        revenueHistoryDao.getLastFiveYearsRevenue().sortedBy { it.seasonYear }
+    }
+
+    suspend fun upsertAnnualRevenueRecord(record: LeagueRevenueHistoryEntity) = withContext(Dispatchers.IO) {
+        revenueHistoryDao.upsertAnnualRevenue(record)
+    }
+
+    suspend fun upsertAnnualRevenueRecords(records: List<LeagueRevenueHistoryEntity>) = withContext(Dispatchers.IO) {
+        revenueHistoryDao.upsertAllAnnualRevenues(records)
+    }
+
+    fun buildCurrentYearRevenueRecord(
+        currentYear: Int,
+        leagueValuationMillions: Long,
+        unionAgreement: LaborUnionAgreement,
+        activeBroadcast: BroadcastContract,
+        franchises: List<Franchise>,
+        championName: String = "In Progress"
+    ): LeagueRevenueHistoryEntity {
+        val proj = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
+            franchises = franchises,
+            activeBroadcast = activeBroadcast,
+            unionAgreement = unionAgreement
+        )
+        val sponsorAnnual = franchises.sumOf { it.localSponsorRevenueMillions.coerceAtLeast(0L) }
+        return LeagueRevenueHistoryEntity(
+            seasonYear = currentYear,
+            totalRevenueMillions = proj.annualLeagueRevenueMillions,
+            broadcastRevenueMillions = activeBroadcast.annualPayoutMillions,
+            sponsorRevenueMillions = sponsorAnnual,
+            namingRightsRevenueMillions = proj.totalNamingRightsRevenueMillions,
+            valuationMillions = leagueValuationMillions,
+            franchiseCount = franchises.size,
+            championName = championName
+        )
+    }
+
+    fun buildLeagueStateSnapshot(
+        leagueName: String,
+        currentYear: Int,
+        currentWeek: Int,
+        seasonPhase: SeasonPhase,
+        cashReservesMillions: Long,
+        leagueValuationMillions: Long,
+        unionAgreement: LaborUnionAgreement,
+        activeBroadcast: BroadcastContract,
+        franchises: List<Franchise>
+    ): LeagueState {
+        val revenueProjection = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
+            franchises = franchises,
+            activeBroadcast = activeBroadcast,
+            unionAgreement = unionAgreement
+        )
+        val sponsorAnnual = franchises.sumOf { it.localSponsorRevenueMillions.coerceAtLeast(0L) }
+        val isUnionActive = !unionAgreement.isLockoutActive
+        val unionStatus = when {
+            unionAgreement.isLockoutActive -> "Owner Lockout Active"
+            unionAgreement.strikeRisk >= 50 -> "Critical Strike Threat"
+            unionAgreement.cbaYearsRemaining <= 1 -> "CBA Expiring Soon"
+            else -> "Active CBA Accord"
+        }
+        return LeagueState(
+            id = 1,
+            leagueName = leagueName,
+            currentYear = currentYear,
+            currentWeek = currentWeek,
+            seasonPhase = seasonPhase.name,
+            totalRevenueMillions = revenueProjection.annualLeagueRevenueMillions,
+            cashReservesMillions = cashReservesMillions,
+            leagueValuationMillions = leagueValuationMillions,
+            annualBroadcastRevenueMillions = activeBroadcast.annualPayoutMillions,
+            annualSponsorRevenueMillions = sponsorAnnual,
+            annualNamingRightsRevenueMillions = revenueProjection.totalNamingRightsRevenueMillions,
+            franchiseCount = franchises.size,
+            isLaborUnionActive = isUnionActive,
+            isLockoutActive = unionAgreement.isLockoutActive,
+            laborUnionStatus = unionStatus,
+            cbaYearsRemaining = unionAgreement.cbaYearsRemaining,
+            unionSatisfaction = unionAgreement.unionSatisfaction,
+            strikeRisk = unionAgreement.strikeRisk,
+            salaryCapMillions = unionAgreement.salaryCapMillions
+        )
     }
 
     suspend fun saveLeague(
@@ -82,6 +183,53 @@ class LeagueRepository(context: Context) {
             newsFeedJson = serializeStringList(newsFeed)
         )
         dao.saveLeague(entity)
+        val leagueState = buildLeagueStateSnapshot(
+            leagueName = leagueName,
+            currentYear = currentYear,
+            currentWeek = currentWeek,
+            seasonPhase = seasonPhase,
+            cashReservesMillions = cashReservesMillions,
+            leagueValuationMillions = leagueValuationMillions,
+            unionAgreement = unionAgreement,
+            activeBroadcast = activeBroadcast,
+            franchises = franchises
+        )
+        leagueStateDao.upsertLeagueState(leagueState)
+        val currentYearRecord = buildCurrentYearRevenueRecord(
+            currentYear = currentYear,
+            leagueValuationMillions = leagueValuationMillions,
+            unionAgreement = unionAgreement,
+            activeBroadcast = activeBroadcast,
+            franchises = franchises,
+            championName = history.firstOrNull { it.year == currentYear }?.championName ?: "In Progress"
+        )
+        val existingByYear = revenueHistoryDao.getLastFiveYearsRevenue().associateBy { it.seasonYear }
+        val historicalRecords = history.distinctBy { it.year }.mapNotNull { h ->
+            if (h.year == currentYear) {
+                currentYearRecord.copy(
+                    championName = h.championName,
+                    valuationMillions = h.valuationMillions,
+                    totalRevenueMillions = maxOf(h.totalRevenueMillions, currentYearRecord.totalRevenueMillions)
+                )
+            } else {
+                val existing = existingByYear[h.year]
+                LeagueRevenueHistoryEntity(
+                    seasonYear = h.year,
+                    totalRevenueMillions = h.totalRevenueMillions,
+                    broadcastRevenueMillions = existing?.broadcastRevenueMillions ?: (h.totalRevenueMillions * 0.42).toLong(),
+                    sponsorRevenueMillions = existing?.sponsorRevenueMillions ?: (h.totalRevenueMillions * 0.48).toLong(),
+                    namingRightsRevenueMillions = existing?.namingRightsRevenueMillions ?: (h.totalRevenueMillions * 0.10).toLong(),
+                    valuationMillions = h.valuationMillions,
+                    franchiseCount = existing?.franchiseCount ?: franchises.size,
+                    championName = h.championName
+                )
+            }
+        }
+        val recordsToPersist = (historicalRecords + currentYearRecord)
+            .associateBy { it.seasonYear }
+            .values
+            .sortedBy { it.seasonYear }
+        revenueHistoryDao.upsertAllAnnualRevenues(recordsToPersist)
         if (freeAgentPool != null || freeAgentSignings != null) {
             saveFreeAgencyState(
                 pool = freeAgentPool ?: emptyList(),
@@ -101,6 +249,8 @@ class LeagueRepository(context: Context) {
 
     suspend fun resetLeague() = withContext(Dispatchers.IO) {
         dao.deleteLeagueSave()
+        leagueStateDao.deleteLeagueState()
+        revenueHistoryDao.clearRevenueHistory()
         clearPrefsSync()
     }
 
@@ -1083,6 +1233,14 @@ class LeagueRepository(context: Context) {
                 put("stadiumCapacity", f.stadiumCapacity)
                 put("stadiumAge", f.stadiumAge)
                 put("stadiumCondition", f.stadiumCondition)
+                put("stadiumSponsorName", f.stadium.sponsorName ?: "")
+                put("stadiumSponsorTier", f.stadium.sponsorTier)
+                put("stadiumSponsorYearsLeft", f.stadium.sponsorYearsLeft)
+                put("stadiumNamingRightsRevenue", f.stadium.namingRightsRevenue)
+                put("relocationCount", f.relocationCount)
+                put("lowSpendingSeasons", f.lowSpendingSeasons)
+                put("reputationScore", f.reputationScore)
+                put("lastReputationNote", f.lastReputationNote)
                 put("ticketPrice", f.ticketPrice)
                 put("annualPayrollMillions", f.annualPayrollMillions)
                 put("localSponsorRevenueMillions", f.localSponsorRevenueMillions)
@@ -1293,6 +1451,19 @@ class LeagueRepository(context: Context) {
                     stadiumCapacity = obj.getInt("stadiumCapacity"),
                     stadiumAge = obj.optInt("stadiumAge", 14).coerceAtLeast(0),
                     stadiumCondition = obj.optInt("stadiumCondition", 78).coerceIn(0, 100),
+                    stadium = TeamStadium(
+                        sponsorName = obj.optString("stadiumSponsorName", "").takeIf { it.isNotBlank() },
+                        sponsorTier = obj.optInt("stadiumSponsorTier", 0).coerceIn(0, 3),
+                        sponsorYearsLeft = obj.optInt("stadiumSponsorYearsLeft", 0).coerceAtLeast(0),
+                        namingRightsRevenue = obj.optLong("stadiumNamingRightsRevenue", 0L).coerceAtLeast(0L)
+                    ),
+                    relocationCount = obj.optInt("relocationCount", 0).coerceAtLeast(0),
+                    lowSpendingSeasons = obj.optInt("lowSpendingSeasons", 0).coerceAtLeast(0),
+                    reputationScore = obj.optInt("reputationScore", 78).coerceIn(10, 99),
+                    lastReputationNote = obj.optString(
+                        "lastReputationNote",
+                        "Balanced ownership investment and market stability."
+                    ),
                     ticketPrice = obj.getInt("ticketPrice"),
                     annualPayrollMillions = obj.getLong("annualPayrollMillions"),
                     localSponsorRevenueMillions = obj.getLong("localSponsorRevenueMillions"),
@@ -2237,6 +2408,24 @@ class LeagueRepository(context: Context) {
             val histArr = JSONArray()
             state.reviewHistory.take(20).forEach { histArr.put(reviewToJson(it)) }
             put("reviewHistory", histArr)
+            put("unlockedMilestonesCount", state.unlockedMilestonesCount)
+            put("recordBroadcastAnnualMillions", state.recordBroadcastAnnualMillions)
+            put("consecutiveLockoutFreeSeasons", state.consecutiveLockoutFreeSeasons)
+            put("maxConsecutiveChampionStreak", state.maxConsecutiveChampionStreak)
+            state.dynastyTeamName?.let { put("dynastyTeamName", it) }
+            val msArr = JSONArray()
+            state.milestones.forEach { m ->
+                msArr.put(
+                    JSONObject().apply {
+                        put("id", m.id.name)
+                        put("currentProgress", m.currentProgress)
+                        put("isUnlocked", m.isUnlocked)
+                        m.unlockedYear?.let { put("unlockedYear", it) }
+                        put("progressNote", m.progressNote)
+                    }
+                )
+            }
+            put("milestones", msArr)
         }
         settingsPrefs.edit().putString("job_security_legacy_state_json", root.toString()).apply()
     }
@@ -2345,6 +2534,20 @@ class LeagueRepository(context: Context) {
                 jsonToReview(histArr.optJSONObject(i))
             }
 
+            val msArr = root.optJSONArray("milestones") ?: JSONArray()
+            val restoredMilestones = (0 until msArr.length()).mapNotNull { i ->
+                val mo = msArr.optJSONObject(i) ?: return@mapNotNull null
+                val mId = runCatching { LeagueLegacyMilestoneId.valueOf(mo.optString("id")) }.getOrNull()
+                    ?: return@mapNotNull null
+                LeagueLegacyMilestone(
+                    id = mId,
+                    currentProgress = mo.optInt("currentProgress", 0),
+                    isUnlocked = mo.optBoolean("isUnlocked", false),
+                    unlockedYear = if (mo.has("unlockedYear")) mo.optInt("unlockedYear") else null,
+                    progressNote = mo.optString("progressNote", "")
+                )
+            }
+
             JobSecurityLegacyState(
                 jobSecurityScore = root.optInt("jobSecurityScore", 78).coerceIn(10, 99),
                 legacyPoints = root.optInt("legacyPoints", 120).coerceAtLeast(0),
@@ -2358,7 +2561,13 @@ class LeagueRepository(context: Context) {
                 lastUpdateHeadline = root.optString(
                     "lastUpdateHeadline",
                     "Board mandate restored from league ledger."
-                )
+                ),
+                milestones = restoredMilestones,
+                unlockedMilestonesCount = root.optInt("unlockedMilestonesCount", restoredMilestones.count { it.isUnlocked }),
+                recordBroadcastAnnualMillions = root.optLong("recordBroadcastAnnualMillions", 65L),
+                consecutiveLockoutFreeSeasons = root.optInt("consecutiveLockoutFreeSeasons", 0),
+                maxConsecutiveChampionStreak = root.optInt("maxConsecutiveChampionStreak", 0),
+                dynastyTeamName = root.optString("dynastyTeamName", "").ifBlank { null }
             )
         } catch (_: Exception) {
             null
@@ -2558,6 +2767,18 @@ class LeagueRepository(context: Context) {
                     put("cityDeals", dealsArr)
                 })
             }
+            state.activeNamingRightsOffer?.let { o ->
+                put("activeNamingRightsOffer", namingOfferSessionToJson(o))
+            }
+            val nrQueueArr = JSONArray()
+            state.pendingNamingRightsQueue.forEach { nrQueueArr.put(namingOfferSessionToJson(it)) }
+            put("pendingNamingRightsQueue", nrQueueArr)
+            state.activeBankruptcyScandal?.let { s ->
+                put("activeBankruptcyScandal", scandalEventToJson(s))
+            }
+            val scQueueArr = JSONArray()
+            state.pendingBankruptcyScandalQueue.forEach { scQueueArr.put(scandalEventToJson(it)) }
+            put("pendingBankruptcyScandalQueue", scQueueArr)
         }
         settingsPrefs.edit().putString("stadium_deal_state_json", root.toString()).apply()
     }
@@ -2608,12 +2829,26 @@ class LeagueRepository(context: Context) {
                     selectedCityId = v.optString("selectedCityId", deals.firstOrNull()?.cityId ?: "")
                 )
             }
+            val activeNamingOffer = root.optJSONObject("activeNamingRightsOffer")?.let { jsonToNamingOfferSession(it) }
+            val nrQArr = root.optJSONArray("pendingNamingRightsQueue") ?: JSONArray()
+            val namingQueue = (0 until nrQArr.length()).mapNotNull { i ->
+                nrQArr.optJSONObject(i)?.let { jsonToNamingOfferSession(it) }
+            }
+            val activeScandal = root.optJSONObject("activeBankruptcyScandal")?.let { jsonToScandalEvent(it) }
+            val scQArr = root.optJSONArray("pendingBankruptcyScandalQueue") ?: JSONArray()
+            val scandalQueue = (0 until scQArr.length()).mapNotNull { i ->
+                scQArr.optJSONObject(i)?.let { jsonToScandalEvent(it) }
+            }
             val histArr = root.optJSONArray("historyLog") ?: JSONArray()
             val hist = (0 until histArr.length()).mapNotNull { i -> histArr.optString(i).takeIf { it.isNotBlank() } }
             StadiumDealState(
                 activeUltimatum = activeUlt,
                 pendingUltimatumQueue = queue,
                 activeRelocationVote = voteObj,
+                activeNamingRightsOffer = activeNamingOffer,
+                pendingNamingRightsQueue = namingQueue,
+                activeBankruptcyScandal = activeScandal,
+                pendingBankruptcyScandalQueue = scandalQueue,
                 lastTickedSeasonYear = root.optInt("lastTickedSeasonYear", 0),
                 lastDecisionSummary = root.optString("lastDecisionSummary", "Monitoring municipal arena leases and stadium conditions across all franchises."),
                 historyLog = hist
@@ -2622,6 +2857,106 @@ class LeagueRepository(context: Context) {
             null
         }
     }
+
+    private fun namingOfferSessionToJson(s: NamingRightsOfferSession): JSONObject = JSONObject().apply {
+        put("id", s.id)
+        put("franchiseId", s.franchiseId)
+        put("franchiseName", s.franchiseName)
+        put("cityName", s.cityName)
+        put("franchiseColorHex", s.franchiseColorHex)
+        put("seasonYear", s.seasonYear)
+        put("triggerReason", s.triggerReason.name)
+        put("previousSponsorName", s.previousSponsorName ?: "")
+        put("teamWins", s.teamWins)
+        put("teamLosses", s.teamLosses)
+        put("scandalPrDrain", s.scandalPrDrain)
+        val offersArr = JSONArray()
+        s.offers.forEach { o ->
+            offersArr.put(JSONObject().apply {
+                put("id", o.id)
+                put("sponsorName", o.sponsorName)
+                put("tier", o.tier)
+                put("termYears", o.termYears)
+                put("annualRevenueMillions", o.annualRevenueMillions)
+                put("scandalRiskPct", o.scandalRiskPct)
+                put("requiresWinningRecord", o.requiresWinningRecord)
+                put("isEligible", o.isEligible)
+                put("ineligibilityReason", o.ineligibilityReason ?: "")
+                put("tagline", o.tagline)
+                put("tierTitle", o.tierTitle)
+                put("riskSummary", o.riskSummary)
+            })
+        }
+        put("offers", offersArr)
+    }
+
+    private fun jsonToNamingOfferSession(obj: JSONObject): NamingRightsOfferSession {
+        val reason = try {
+            NamingRightsTriggerReason.valueOf(obj.optString("triggerReason", NamingRightsTriggerReason.NEW_STADIUM_BUILT.name))
+        } catch (_: Exception) {
+            NamingRightsTriggerReason.NEW_STADIUM_BUILT
+        }
+        val offersArr = obj.optJSONArray("offers") ?: JSONArray()
+        val offers = (0 until offersArr.length()).mapNotNull { i ->
+            val o = offersArr.optJSONObject(i) ?: return@mapNotNull null
+            NamingRightsSponsorOffer(
+                id = o.optString("id"),
+                sponsorName = o.optString("sponsorName"),
+                tier = o.optInt("tier", 1),
+                termYears = o.optInt("termYears", 3),
+                annualRevenueMillions = o.optLong("annualRevenueMillions", 5L),
+                scandalRiskPct = o.optInt("scandalRiskPct", 0),
+                requiresWinningRecord = o.optBoolean("requiresWinningRecord", false),
+                isEligible = o.optBoolean("isEligible", true),
+                ineligibilityReason = o.optString("ineligibilityReason", "").takeIf { it.isNotBlank() },
+                tagline = o.optString("tagline", ""),
+                tierTitle = o.optString("tierTitle", ""),
+                riskSummary = o.optString("riskSummary", "")
+            )
+        }
+        return NamingRightsOfferSession(
+            id = obj.optString("id"),
+            franchiseId = obj.optString("franchiseId"),
+            franchiseName = obj.optString("franchiseName"),
+            cityName = obj.optString("cityName"),
+            franchiseColorHex = obj.optLong("franchiseColorHex", 0xFFF59E0BL),
+            seasonYear = obj.optInt("seasonYear", 2026),
+            triggerReason = reason,
+            previousSponsorName = obj.optString("previousSponsorName", "").takeIf { it.isNotBlank() },
+            teamWins = obj.optInt("teamWins", 0),
+            teamLosses = obj.optInt("teamLosses", 0),
+            offers = offers,
+            scandalPrDrain = obj.optInt("scandalPrDrain", 0)
+        )
+    }
+
+    private fun scandalEventToJson(e: SponsorBankruptcyScandalEvent): JSONObject = JSONObject().apply {
+        put("id", e.id)
+        put("franchiseId", e.franchiseId)
+        put("franchiseName", e.franchiseName)
+        put("cityName", e.cityName)
+        put("bankruptSponsorName", e.bankruptSponsorName)
+        put("lostAnnualRevenueMillions", e.lostAnnualRevenueMillions)
+        put("seasonYear", e.seasonYear)
+        put("leaguePrDrain", e.leaguePrDrain)
+        put("fanMoraleDrain", e.fanMoraleDrain)
+        put("headline", e.headline)
+        put("description", e.description)
+    }
+
+    private fun jsonToScandalEvent(obj: JSONObject): SponsorBankruptcyScandalEvent = SponsorBankruptcyScandalEvent(
+        id = obj.optString("id"),
+        franchiseId = obj.optString("franchiseId"),
+        franchiseName = obj.optString("franchiseName"),
+        cityName = obj.optString("cityName"),
+        bankruptSponsorName = obj.optString("bankruptSponsorName"),
+        lostAnnualRevenueMillions = obj.optLong("lostAnnualRevenueMillions", 20L),
+        seasonYear = obj.optInt("seasonYear", 2026),
+        leaguePrDrain = obj.optInt("leaguePrDrain", 9),
+        fanMoraleDrain = obj.optInt("fanMoraleDrain", 4),
+        headline = obj.optString("headline"),
+        description = obj.optString("description")
+    )
 
     private fun ultimatumToJson(u: StadiumUltimatumEvent): JSONObject = JSONObject().apply {
         put("id", u.id)

@@ -244,13 +244,25 @@ object FreeAgencyEngine {
         val salaryCap = unionAgreement.salaryCapMillions.coerceAtLeast(80L)
         val capRoom = salaryCap - team.annualPayrollMillions
         val strictness = ruleBook.salaryCapStrictness
-        val marketSalary = freeAgent.askingSalaryMillions
+        val oddsPreview = TeamReputationEngine.evaluateFreeAgentSigningOdds(
+            freeAgent = freeAgent,
+            franchise = team,
+            salaryCapMillions = salaryCap,
+            offerSalaryMillions = freeAgent.askingSalaryMillions,
+            isUrgentDepthNeed = isUrgentDepthNeed
+        )
+        val marketSalary = (freeAgent.askingSalaryMillions + oddsPreview.demandedSalaryPremiumMillions)
+            .coerceAtMost(42L)
 
         var finalSalary = marketSalary
         var years = freeAgent.preferredYears
         var contractLabel: String
         var isCapCompliant = true
-        var complianceNote = "Cap Compliant"
+        var complianceNote = if (oddsPreview.demandedSalaryPremiumMillions > 0L) {
+            "Cap Compliant (+\$${oddsPreview.demandedSalaryPremiumMillions}M Rep Tax)"
+        } else {
+            "Cap Compliant"
+        }
 
         when (strictness) {
             SalaryCapStrictness.STRICT_HARD_CAP -> {
@@ -258,7 +270,6 @@ object FreeAgencyEngine {
                     isCapCompliant = false
                     complianceNote = "Blocked: Hard Cap ceiling reached (\$$capRoom M room)"
                 } else if (marketSalary > capRoom) {
-                    // Player accepts discounted prove-it / depth contract if within 65% of ask or at least $2M
                     val affordable = capRoom.coerceAtLeast(2L)
                     if (affordable >= (marketSalary * 0.55).roundToInt().toLong() || freeAgent.overallRating <= 78) {
                         finalSalary = affordable
@@ -271,7 +282,6 @@ object FreeAgencyEngine {
             }
             SalaryCapStrictness.PROGRESSIVE_LUXURY_TAX, SalaryCapStrictness.MODERATE_SOFT_CAP -> {
                 if (capRoom < marketSalary) {
-                    // Use Mid-Level Exception up to $11M or Veteran Minimum ($2M-$4M)
                     if (freeAgent.overallRating >= 79 && marketSalary <= 14L && capRoom >= -18L) {
                         finalSalary = minOf(marketSalary, 11L)
                         years = minOf(years, 2)
@@ -382,7 +392,9 @@ object FreeAgencyEngine {
         sportType: SportType = SportType.BASKETBALL,
         customYears: Int? = null,
         reasonOverride: String? = null,
-        isAutoSigned: Boolean = false
+        isAutoSigned: Boolean = false,
+        enforceReputationCheck: Boolean = true,
+        signingRollOverride: Int? = null
     ): SingleFreeAgencySigningResult {
         val needSummary = evaluateDepthChartNeeds(franchise, sportType, ruleBook)
         val maxRosterSlots = (ruleBook.rosterSizeRule.activeSlots + ruleBook.rosterSizeRule.reserveSlots).coerceAtLeast(10)
@@ -414,6 +426,31 @@ object FreeAgencyEngine {
             )
         }
 
+        val signingOdds = TeamReputationEngine.evaluateFreeAgentSigningOdds(
+            freeAgent = freeAgent,
+            franchise = franchise,
+            salaryCapMillions = unionAgreement.salaryCapMillions,
+            offerSalaryMillions = offer.salaryMillions,
+            isUrgentDepthNeed = isUrgent
+        )
+        if (enforceReputationCheck && !TeamReputationEngine.shouldAcceptFreeAgentOffer(
+                odds = signingOdds,
+                freeAgent = freeAgent,
+                franchise = franchise,
+                week = week,
+                isUrgentDepthNeed = isUrgent,
+                signingRollOverride = signingRollOverride
+            )
+        ) {
+            val declineMsg = signingOdds.refusalReason
+                ?: "${freeAgent.name} declined ${franchise.teamFullName}'s offer (${signingOdds.likelihoodPct}% signing odds)."
+            return SingleFreeAgencySigningResult(
+                success = false,
+                message = declineMsg,
+                newsHeadline = "FREE AGENT SNUB: $declineMsg"
+            )
+        }
+
         val finalYears = (customYears ?: offer.contractYears).coerceIn(1, 4)
         val newPlayer = RosterPlayer(
             id = freeAgent.id,
@@ -431,9 +468,12 @@ object FreeAgencyEngine {
         )
 
         val appendedRoster = franchise.roster + newPlayer
-        val preUpdatedTeam = franchise.copy(
-            roster = appendedRoster,
-            annualPayrollMillions = franchise.annualPayrollMillions + offer.salaryMillions
+        val preUpdatedTeam = TeamReputationEngine.applyReputationToFranchise(
+            franchise.copy(
+                roster = appendedRoster,
+                annualPayrollMillions = franchise.annualPayrollMillions + offer.salaryMillions
+            ),
+            unionAgreement.salaryCapMillions
         )
 
         // If an active starter is OUT/IR, fewer than 5 starters are active, or the new signing upgrades over the weakest active starter,
@@ -527,21 +567,26 @@ object FreeAgencyEngine {
         val signings = mutableListOf<FreeAgentSigningTransaction>()
         val headlines = mutableListOf<String>()
 
-        // Evaluate needs across all franchises and sort highest priority first
+        // Evaluate needs & team reputation across all franchises
         val prioritizedTeamIds = workingFranchises.map { team ->
-            evaluateDepthChartNeeds(team, sportType, ruleBook)
-        }.filter { summary ->
+            val need = evaluateDepthChartNeeds(team, sportType, ruleBook)
+            val rep = TeamReputationEngine.evaluateReputation(team, unionAgreement.salaryCapMillions)
+            need to rep.score
+        }.filter { (summary, _) ->
             summary.openRosterSlots > 0 &&
                 if (urgentOnly) (summary.urgentHolesCount > 0 || summary.healthyCount < 8) else summary.priorityScore > 0
-        }.sortedByDescending { it.priorityScore }
+        }.sortedByDescending { (summary, repScore) ->
+            summary.priorityScore + ((repScore - 65) / 2)
+        }.map { it.first }
 
         for (need in prioritizedTeamIds) {
             if (signings.size >= maxSigningsPerSweep) break
             val tIdx = workingFranchises.indexOfFirst { it.id == need.franchiseId }
             if (tIdx == -1) continue
             val team = workingFranchises[tIdx]
+            val isUrgent = need.urgentHolesCount > 0 || need.healthyCount < 8
 
-            // Pick best affordable free agent matching needed position (or best overall within budget)
+            // Pick best affordable free agent matching needed position and team reputation willingness
             val candidate = workingPool
                 .mapNotNull { fa ->
                     val offer = calculateRealisticContract(
@@ -549,15 +594,28 @@ object FreeAgencyEngine {
                         team = team,
                         ruleBook = ruleBook,
                         unionAgreement = unionAgreement,
-                        isUrgentDepthNeed = need.urgentHolesCount > 0 || need.healthyCount < 8
+                        isUrgentDepthNeed = isUrgent
                     )
-                    if (!offer.isCapCompliant) null
-                    else {
-                        val posBonus = if (fa.position in need.neededPositions) 12 else 0
-                        val contenderBonus = if (team.rosterRating >= 84 && fa.overallRating >= 80) 4 else 0
-                        val capSensitivity = if (offer.salaryMillions > 14L && need.urgentHolesCount == 0 && need.healthyCount >= 8) -6 else 0
-                        val score = fa.overallRating + posBonus + contenderBonus + capSensitivity
-                        fa to score
+                    if (!offer.isCapCompliant) {
+                        null
+                    } else {
+                        val odds = TeamReputationEngine.evaluateFreeAgentSigningOdds(
+                            freeAgent = fa,
+                            franchise = team,
+                            salaryCapMillions = unionAgreement.salaryCapMillions,
+                            offerSalaryMillions = offer.salaryMillions,
+                            isUrgentDepthNeed = isUrgent
+                        )
+                        if (!TeamReputationEngine.shouldAcceptFreeAgentOffer(odds, fa, team, week, isUrgent)) {
+                            null
+                        } else {
+                            val posBonus = if (fa.position in need.neededPositions) 12 else 0
+                            val contenderBonus = if (team.rosterRating >= 84 && fa.overallRating >= 80) 4 else 0
+                            val repBonus = ((odds.likelihoodPct - 60) / 5)
+                            val capSensitivity = if (offer.salaryMillions > 14L && need.urgentHolesCount == 0 && need.healthyCount >= 8) -6 else 0
+                            val score = fa.overallRating + posBonus + contenderBonus + repBonus + capSensitivity
+                            fa to score
+                        }
                     }
                 }
                 .maxByOrNull { it.second }

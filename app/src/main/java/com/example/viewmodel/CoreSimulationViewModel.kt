@@ -85,7 +85,7 @@ class CoreSimulationViewModel : ViewModel() {
         } else {
             state.lastRevenueBreakdown?.grossLeagueRevenueMillions?.coerceAtLeast(1L)
                 ?: (((state.activeBroadcast.annualPayoutMillions / 16.0) * exclusivityFactor * 0.15) +
-                    (state.franchises.sumOf { it.localSponsorRevenueMillions } / 16.0 * 0.15))
+                    (state.franchises.sumOf { it.localSponsorRevenueMillions + it.stadium.namingRightsRevenue } / 16.0 * 0.15))
                     .roundToLong()
                     .coerceAtLeast(4L)
         }
@@ -1570,9 +1570,19 @@ class CoreSimulationViewModel : ViewModel() {
                 )
             )
         }
+        val postRebuildStadiumState = facilityTick.rebuiltStadiumTeamIds.fold(resultState.stadiumDealState) { acc, teamId ->
+            val rebuilt = resultState.franchises.find { it.id == teamId } ?: return@fold acc
+            StadiumDealEngine.enqueueNamingRightsOfferForFranchise(
+                currentState = acc,
+                franchise = rebuilt,
+                seasonYear = resultState.currentYear,
+                triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT
+            )
+        }
         resultState = resultState.copy(
             crisisState = updatedCrisisState,
-            activeDilemma = triggeredDilemma
+            activeDilemma = triggeredDilemma,
+            stadiumDealState = postRebuildStadiumState
         )
 
         val triggerEval = evaluateLaborUnionTriggers(
@@ -1728,12 +1738,22 @@ class CoreSimulationViewModel : ViewModel() {
             cities = state.cities,
             sportType = state.sportType
         )
+        val postAllStarStadiumState = facilityTick.rebuiltStadiumTeamIds.fold(state.stadiumDealState) { acc, teamId ->
+            val rebuilt = adjustedFranchises.find { it.id == teamId } ?: return@fold acc
+            StadiumDealEngine.enqueueNamingRightsOfferForFranchise(
+                currentState = acc,
+                franchise = rebuilt,
+                seasonYear = state.currentYear,
+                triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT
+            )
+        }
         val nextState = state.copy(
             seasonPhase = SeasonPhase.REGULAR_SEASON,
             franchises = adjustedFranchises,
             freeAgentPool = faSweep.updatedPool,
             freeAgentSignings = (faSweep.newSignings + state.freeAgentSignings).take(40),
             unionAgreement = updatedUnion,
+            stadiumDealState = postAllStarStadiumState,
             cashReservesMillions = state.cashReservesMillions + simulationOutcome.netRevenueMillions,
             totalLeagueFanbaseMillions = Math.round((state.totalLeagueFanbaseMillions + simulationOutcome.fanbaseGainMillions) * 100.0) / 100.0,
             leagueValuationMillions = state.leagueValuationMillions + simulationOutcome.valuationGainMillions + facilityTick.totalLeagueValuationGainMillions,
@@ -1936,15 +1956,24 @@ class CoreSimulationViewModel : ViewModel() {
                 seasonYear = state.currentYear,
                 completeAllRemainingRounds = true
             )
-            val updatedFranchises = minorPoFinals.updatedFranchises
+            val updatedFranchises = TeamReputationEngine.refreshAllFranchiseReputations(
+                franchises = minorPoFinals.updatedFranchises,
+                salaryCapMillions = state.unionAgreement.salaryCapMillions,
+                incrementLowSpendingSeason = true
+            )
             val championPlayerIds = champion.roster.map { it.id }.toSet()
             val finalCareerStats = statsResult.careerStats.mapValues { (pId, cStat) ->
                 if (pId in championPlayerIds) cStat.copy(championships = cStat.championships + 1) else cStat
             }
+            val annualRevProjection = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
+                franchises = updatedFranchises,
+                activeBroadcast = state.activeBroadcast,
+                unionAgreement = state.unionAgreement
+            )
             val newHistory = LeagueValuationHistory(
                 year = state.currentYear,
                 valuationMillions = state.leagueValuationMillions,
-                totalRevenueMillions = state.franchises.sumOf { it.localSponsorRevenueMillions } + state.activeBroadcast.annualPayoutMillions,
+                totalRevenueMillions = annualRevProjection.annualLeagueRevenueMillions,
                 championName = champion.teamFullName
             )
             val offSeasonSession = OffSeasonEngine.createOffSeasonSession(
@@ -2001,12 +2030,36 @@ class CoreSimulationViewModel : ViewModel() {
                     )
                 )
             }
-            val stadiumCheck = StadiumDealEngine.processOffseasonStadiumsAndCheckUltimatums(
+            val finalsRecords = updatedFranchises.associate { it.id to (it.wins to it.losses) }
+            val stadiumCheckRaw = StadiumDealEngine.processOffseasonStadiumsAndCheckUltimatums(
                 currentState = state.stadiumDealState,
                 franchises = updatedFranchises,
-                seasonYear = state.currentYear
+                seasonYear = state.currentYear,
+                seasonRecordsByFranchiseId = finalsRecords
             )
-            if (stadiumCheck.triggeredUltimatums.isNotEmpty()) {
+            val stadiumDealAfterRebuilds = playoffFacilityTick.rebuiltStadiumTeamIds.fold(stadiumCheckRaw.updatedStadiumDealState) { acc, teamId ->
+                val rebuilt = stadiumCheckRaw.updatedFranchises.find { it.id == teamId } ?: return@fold acc
+                StadiumDealEngine.enqueueNamingRightsOfferForFranchise(
+                    currentState = acc,
+                    franchise = rebuilt,
+                    seasonYear = state.currentYear,
+                    triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT
+                )
+            }
+            val stadiumCheck = stadiumCheckRaw.copy(updatedStadiumDealState = stadiumDealAfterRebuilds)
+            if (stadiumCheck.triggeredBankruptcyScandals.isNotEmpty()) {
+                val scandal = stadiumCheck.triggeredBankruptcyScandals.first()
+                emitDashboardSnackbar(
+                    DashboardSnackbarEvent(
+                        id = "snack_sponsor_scandal_${state.currentYear}_${scandal.franchiseId}",
+                        type = DashboardAlertType.CRISIS_ALERT,
+                        severity = DashboardAlertSeverity.CRITICAL,
+                        message = scandal.headline,
+                        actionLabel = "Replace",
+                        targetRoute = DashboardSnackbarRoute.STADIUM_ULTIMATUM
+                    )
+                )
+            } else if (stadiumCheck.triggeredUltimatums.isNotEmpty()) {
                 emitDashboardSnackbar(
                     DashboardSnackbarEvent(
                         id = "snack_stadium_ultimatum_${state.currentYear}",
@@ -2035,6 +2088,7 @@ class CoreSimulationViewModel : ViewModel() {
                 minorLeagueState = minorPoFinals.minorState,
                 cashReservesMillions = state.cashReservesMillions + playoffRivalryCashCut,
                 leagueValuationMillions = state.leagueValuationMillions + playoffFacilityTick.totalLeagueValuationGainMillions,
+                leagueIntegrityScore = (state.leagueIntegrityScore - stadiumCheck.totalLeaguePrDrain).coerceIn(20, 100),
                 lastRevenueBreakdown = playoffRevenue,
                 playoffMatches = annotatedAllMatchesSoFar,
                 valuationHistory = listOf(newHistory) + state.valuationHistory,
@@ -2061,18 +2115,35 @@ class CoreSimulationViewModel : ViewModel() {
                 recentNews = (listOf("CHAMPION CROWNED! ${champion.teamFullName} lift the Apex Commissioner Trophy!") + stadiumCheck.headlines + listOfNotNull(rivalPoachResult.headline) + minorPoFinals.headlines + playoffFaSweep.headlines + playoffFacilityTick.headlines + playoffRivalryResult.headlines + playoffInjurySim.headlines + recoveryTick.clearanceHeadlines + statsResult.brokenAlerts + listOfNotNull(potwNews) + state.recentNews).take(20)
             )
             val reviewInput = preTrendState.toPerformanceInput(seasonChampionNameOverride = champion.teamFullName)
-            val generatedReview = JobSecurityLegacyEngine.generateAnnualReview(
+            val legacyEval = LeagueLegacyTracker.evaluateAndUnlockMilestones(
                 current = preTrendState.jobSecurityLegacyState,
+                input = reviewInput,
+                isSeasonRollover = false
+            )
+            legacyEval.newlyUnlockedMilestones.firstOrNull()?.let { milestone ->
+                emitDashboardSnackbar(
+                    DashboardSnackbarEvent(
+                        id = "snack_legacy_milestone_${state.currentYear}_${milestone.id.name}",
+                        type = DashboardAlertType.SEASON_MILESTONE,
+                        severity = DashboardAlertSeverity.MILESTONE,
+                        message = "League Legacy Unlocked: ${milestone.title} (+${milestone.rewardLegacyPoints} Pts)",
+                        actionLabel = "Legacy",
+                        targetRoute = DashboardSnackbarRoute.STANDINGS
+                    )
+                )
+            }
+            val generatedReview = JobSecurityLegacyEngine.generateAnnualReview(
+                current = legacyEval.updatedState,
                 input = reviewInput
             )
             val reviewHeadline = "ANNUAL PERFORMANCE REVIEW READY (Y${generatedReview.seasonYear}): Grade [${generatedReview.overallGrade.letter}] • ${generatedReview.contractAction.label} (+${generatedReview.legacyPointsAwarded} Legacy Pts)."
             val withReviewState = preTrendState.copy(
-                jobSecurityLegacyState = preTrendState.jobSecurityLegacyState.copy(
+                jobSecurityLegacyState = legacyEval.updatedState.copy(
                     latestBreakdown = JobSecurityLegacyEngine.evaluateStakeholders(reviewInput),
                     pendingAnnualReview = generatedReview,
-                    lastUpdateHeadline = reviewHeadline
+                    lastUpdateHeadline = legacyEval.headlines.firstOrNull() ?: reviewHeadline
                 ),
-                recentNews = (listOf(reviewHeadline) + preTrendState.recentNews).take(20)
+                recentNews = (legacyEval.headlines + listOf(reviewHeadline) + preTrendState.recentNews).take(20)
             )
             val updatedTrends = appendDashboardTrendPoint(
                 state = withReviewState,
@@ -2132,11 +2203,21 @@ class CoreSimulationViewModel : ViewModel() {
             _seasonProgressionEvents.tryEmit(
                 SeasonProgressionEvent.PlayoffRoundCompleted(state.currentYear, currentRoundName, null)
             )
+            val playoffRoundStadiumState = playoffFacilityTick.rebuiltStadiumTeamIds.fold(state.stadiumDealState) { acc, teamId ->
+                val rebuilt = playoffDisciplinary.updatedFranchises.find { it.id == teamId } ?: return@fold acc
+                StadiumDealEngine.enqueueNamingRightsOfferForFranchise(
+                    currentState = acc,
+                    franchise = rebuilt,
+                    seasonYear = state.currentYear,
+                    triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT
+                )
+            }
             val preTrendRoundState = state.copy(
                 currentWeek = nextWeek,
                 franchises = playoffDisciplinary.updatedFranchises,
                 disciplinaryState = playoffDisciplinary.updatedState,
                 officiatingState = playoffOfficiating.updatedState,
+                stadiumDealState = playoffRoundStadiumState,
                 leagueIntegrityScore = (state.leagueIntegrityScore + playoffOfficiating.integrityDelta).coerceIn(20, 100),
                 minorLeagueState = minorPoRound.minorState,
                 cashReservesMillions = (state.cashReservesMillions + playoffRivalryCashCut - playoffOfficiating.weeklyTechOpsCostMillions).coerceAtLeast(0L),
@@ -2257,6 +2338,7 @@ class CoreSimulationViewModel : ViewModel() {
         val newInductees = session.hallOfFameInductees.filter { it.id !in existingHofIds }
         val updatedHallOfFame = newInductees + state.hallOfFame
 
+        val finishedSeasonRecords = state.franchises.associate { it.id to (it.wins to it.losses) }
         val preHealFranchises = state.franchises.map { team ->
             val movement = session.teamMovements.find { it.franchiseId == team.id }
             val newRating = movement?.endRating ?: team.rosterRating
@@ -2292,9 +2374,17 @@ class CoreSimulationViewModel : ViewModel() {
             state.activeBroadcast.copy(yearsRemaining = state.activeBroadcast.yearsRemaining - 1)
         }
 
-        // Decrement CBA years remaining on season rollover
+        // Decrement CBA years remaining & scale next season's Salary Cap from annual league revenue (including stadium naming rights)
+        val capProjection = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
+            franchises = state.franchises,
+            activeBroadcast = newBroadcastDeal,
+            unionAgreement = state.unionAgreement
+        )
         val decrementedCbaYears = (state.unionAgreement.cbaYearsRemaining - 1).coerceAtLeast(0)
-        val rolledUnionAgreement = state.unionAgreement.copy(cbaYearsRemaining = decrementedCbaYears)
+        val rolledUnionAgreement = state.unionAgreement.copy(
+            cbaYearsRemaining = decrementedCbaYears,
+            salaryCapMillions = capProjection.nextSalaryCapMillions
+        )
 
         val syncedRivalries = RivalryEngine.syncRivalriesForLeagueTopology(
             franchises = updatedFranchises, cities = state.cities, currentRivalries = state.rivalries, seasonYear = nextYear
@@ -2353,7 +2443,10 @@ class CoreSimulationViewModel : ViewModel() {
         val hofNote = if (newInductees.isNotEmpty()) " Hall of Fame Class (${newInductees.joinToString(", ") { it.name }}) enshrined!" else ""
         val facilityNote = if (facilityAppreciationDelta > 0L) " Franchise infrastructure appreciated +\$${facilityAppreciationDelta}M." else ""
         val schedNote = " ${promotedSchedule.regularSeasonWeeks}W calendar (${promotedSchedule.holidayShowcaseCount} Holiday, ${promotedSchedule.internationalGameCount} Intl) locked."
-        val headline = "OFF-SEASON CONCLUDED: Season $nextYear Pre-Season Training Camp opens with ${session.draftPicks.size} newly drafted rookies! Parity Index: ${session.finalParityScore}/100.$hofNote$facilityNote$schedNote"
+        val capHeadlineNote = if (capProjection.salaryCapIncreaseMillions > 0L) {
+            " Salary Cap rose +\$${capProjection.salaryCapIncreaseMillions}M to \$${capProjection.nextSalaryCapMillions}M (backed by \$${capProjection.totalNamingRightsRevenueMillions}M stadium naming rights & \$${capProjection.annualLeagueRevenueMillions}M annual revenue)."
+        } else ""
+        val headline = "OFF-SEASON CONCLUDED: Season $nextYear Pre-Season Training Camp opens with ${session.draftPicks.size} newly drafted rookies! Parity Index: ${session.finalParityScore}/100.$hofNote$facilityNote$schedNote$capHeadlineNote"
 
         val refreshedFaPool = FreeAgencyEngine.replenishFreeAgentPool(
             currentPool = state.freeAgentPool, franchises = updatedFranchises, sportType = state.sportType,
@@ -2388,11 +2481,38 @@ class CoreSimulationViewModel : ViewModel() {
             currentMinorState = state.minorLeagueState, franchises = rolledPickFranchises,
             sportType = state.sportType, finishedYear = state.currentYear, nextYear = nextYear
         )
-        val stadiumRolloverCheck = StadiumDealEngine.processOffseasonStadiumsAndCheckUltimatums(
+        val stadiumRolloverRaw = StadiumDealEngine.processOffseasonStadiumsAndCheckUltimatums(
             currentState = state.stadiumDealState,
             franchises = minorRollover.updatedFranchises,
-            seasonYear = state.currentYear
+            seasonYear = state.currentYear,
+            seasonRecordsByFranchiseId = finishedSeasonRecords
         )
+        val stadiumStateAfterRebuilds = offSeasonFacilityTick.rebuiltStadiumTeamIds.fold(stadiumRolloverRaw.updatedStadiumDealState) { acc, teamId ->
+            val rebuilt = stadiumRolloverRaw.updatedFranchises.find { it.id == teamId } ?: return@fold acc
+            val rec = finishedSeasonRecords[teamId]
+            StadiumDealEngine.enqueueNamingRightsOfferForFranchise(
+                currentState = acc,
+                franchise = rebuilt,
+                seasonYear = state.currentYear,
+                triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
+                winsOverride = rec?.first,
+                lossesOverride = rec?.second
+            )
+        }
+        val stadiumRolloverCheck = stadiumRolloverRaw.copy(updatedStadiumDealState = stadiumStateAfterRebuilds)
+        if (stadiumRolloverCheck.triggeredBankruptcyScandals.isNotEmpty()) {
+            val scandal = stadiumRolloverCheck.triggeredBankruptcyScandals.first()
+            emitDashboardSnackbar(
+                DashboardSnackbarEvent(
+                    id = "snack_sponsor_scandal_roll_${state.currentYear}_${scandal.franchiseId}",
+                    type = DashboardAlertType.CRISIS_ALERT,
+                    severity = DashboardAlertSeverity.CRITICAL,
+                    message = scandal.headline,
+                    actionLabel = "Replace",
+                    targetRoute = DashboardSnackbarRoute.STADIUM_ULTIMATUM
+                )
+            )
+        }
 
         val rolledRefs = state.officiatingState.referees.map {
             it.copy(
@@ -2420,13 +2540,18 @@ class CoreSimulationViewModel : ViewModel() {
             lastAuditHeadline = "Season $nextYear NLOA officiating roster reset and certified."
         )
 
+        val reputationSyncedFranchises = TeamReputationEngine.refreshAllFranchiseReputations(
+            franchises = stadiumRolloverCheck.updatedFranchises,
+            salaryCapMillions = rolledUnionAgreement.salaryCapMillions,
+            incrementLowSpendingSeason = false
+        )
         val preTriggerState = state.copy(
             currentYear = nextYear,
             currentWeek = 1,
             totalWeeks = ScheduleCalendarEngine.totalWeeksFor(targetRegWeeks),
             seasonPhase = SeasonPhase.PRE_SEASON,
             competitiveParityScore = session.finalParityScore,
-            franchises = stadiumRolloverCheck.updatedFranchises,
+            franchises = reputationSyncedFranchises,
             minorLeagueState = minorRollover.minorState,
             freeAgentPool = offseasonRivalCheck.updatedFreeAgentPool,
             rivalLeague = offseasonRivalCheck.updatedRivalLeague,
@@ -2434,6 +2559,7 @@ class CoreSimulationViewModel : ViewModel() {
             unionAgreement = rolledUnionAgreement,
             officiatingState = rolledOfficiatingState,
             leagueValuationMillions = state.leagueValuationMillions + offSeasonFacilityTick.totalLeagueValuationGainMillions + facilityAppreciationDelta,
+            leagueIntegrityScore = (state.leagueIntegrityScore - stadiumRolloverCheck.totalLeaguePrDrain).coerceIn(20, 100),
             activeBroadcast = newBroadcastDeal,
             currentWeekMatches = initialMatches,
             playoffMatches = emptyList(),
@@ -2532,11 +2658,34 @@ class CoreSimulationViewModel : ViewModel() {
             fanSentimentState = rolloverSentiment,
             recentNews = (triggerEval.headlines + listOf(headline) + stadiumRolloverCheck.headlines + listOfNotNull(offseasonRivalCheck.headline) + minorRollover.headlines + offSeasonFacilityTick.headlines + postReviewRolloverState.recentNews).take(20)
         ).let { s ->
-            s.copy(
-                jobSecurityLegacyState = JobSecurityLegacyEngine.recalculateLiveSecurity(
-                    current = s.jobSecurityLegacyState,
-                    input = s.toPerformanceInput()
+            val beforeUnlockedIds = s.jobSecurityLegacyState.milestones
+                .filter { it.isUnlocked }
+                .map { it.id }
+                .toSet()
+            val updatedSec = JobSecurityLegacyEngine.recalculateLiveSecurity(
+                current = s.jobSecurityLegacyState,
+                input = s.toPerformanceInput(),
+                isSeasonRollover = true
+            )
+            val newlyUnlocked = updatedSec.milestones.filter { it.isUnlocked && it.id !in beforeUnlockedIds }
+            newlyUnlocked.firstOrNull()?.let { milestone ->
+                emitDashboardSnackbar(
+                    DashboardSnackbarEvent(
+                        id = "snack_legacy_rollover_${nextYear}_${milestone.id.name}",
+                        type = DashboardAlertType.SEASON_MILESTONE,
+                        severity = DashboardAlertSeverity.MILESTONE,
+                        message = "League Legacy Unlocked: ${milestone.title} (+${milestone.rewardLegacyPoints} Pts)",
+                        actionLabel = "Legacy",
+                        targetRoute = DashboardSnackbarRoute.STANDINGS
+                    )
                 )
+            }
+            val rolloverMilestoneHeadlines = newlyUnlocked.map { m ->
+                "LEAGUE LEGACY MILESTONE UNLOCKED: '${m.title}' (+${m.rewardLegacyPoints} Legacy Pts) — ${m.progressNote}"
+            }
+            s.copy(
+                jobSecurityLegacyState = updatedSec,
+                recentNews = (rolloverMilestoneHeadlines + s.recentNews).take(20)
             )
         }
         val updatedTrends = appendDashboardTrendPoint(

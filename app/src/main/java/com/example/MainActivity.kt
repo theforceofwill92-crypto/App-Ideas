@@ -29,10 +29,12 @@ import com.example.ui.components.DashboardSnackbarEffect
 import com.example.ui.components.DashboardSnackbarHost
 import com.example.ui.components.DilemmaDialog
 import com.example.ui.components.LaborUnionNegotiationOverlay
+import com.example.ui.components.NamingRightsOfferModal
 import com.example.ui.components.NewLeagueDialog
 import com.example.ui.components.RelocationVoteModal
 import com.example.ui.components.RivalAbsorptionNegotiationModal
 import com.example.ui.components.RivalWatchModal
+import com.example.ui.components.SponsorBankruptcyScandalModal
 import com.example.ui.screens.*
 import com.example.ui.theme.GoldPrimary
 import com.example.ui.theme.MyApplicationTheme
@@ -70,17 +72,72 @@ fun MainAppContent(viewModel: LeagueViewModel) {
         onActiveAlertChange = { activeSnackbarAlert = it }
     )
 
-    if (uiState.activeBoardVoteModal != null) {
-        val voteModal = uiState.activeBoardVoteModal!!
-        com.example.ui.components.BoardOfGovernorsVoteDialog(
-            voteResult = voteModal,
-            onDismiss = { viewModel.dismissBoardVoteModal() },
-            onExecutiveOverride = if (!voteModal.passed) {
-                { viewModel.overrideLastVetoedVote() }
-            } else null
+    Box(modifier = Modifier.fillMaxSize()) {
+        ActiveScreenContent(
+            uiState = uiState,
+            viewModel = viewModel,
+            snackbarHostState = snackbarHostState,
+            activeSnackbarAlert = activeSnackbarAlert
         )
-    }
 
+        if (uiState.activeBoardVoteModal != null) {
+            val voteModal = uiState.activeBoardVoteModal!!
+            com.example.ui.components.BoardOfGovernorsVoteDialog(
+                voteResult = voteModal,
+                onDismiss = { viewModel.dismissBoardVoteModal() },
+                onExecutiveOverride = if (!voteModal.passed) {
+                    { viewModel.overrideLastVetoedVote() }
+                } else null
+            )
+        }
+
+        uiState.stadiumDealState.activeRelocationVote?.let { voteState ->
+            RelocationVoteModal(
+                voteState = voteState,
+                onSelectCity = { cityId -> viewModel.selectRelocationVoteCity(cityId) },
+                onApproveRelocation = { viewModel.resolveRelocationVote(approve = true) },
+                onVetoRelocation = { viewModel.resolveRelocationVote(approve = false) }
+            )
+        }
+
+        if (uiState.stadiumDealState.activeRelocationVote == null &&
+            uiState.stadiumDealState.activeBankruptcyScandal != null
+        ) {
+            SponsorBankruptcyScandalModal(
+                scandal = uiState.stadiumDealState.activeBankruptcyScandal!!,
+                onPickReplacement = { viewModel.acknowledgeSponsorBankruptcyScandal() }
+            )
+        }
+
+        if (uiState.stadiumDealState.activeRelocationVote == null &&
+            uiState.stadiumDealState.activeBankruptcyScandal == null &&
+            uiState.stadiumDealState.activeNamingRightsOffer != null
+        ) {
+            NamingRightsOfferModal(
+                session = uiState.stadiumDealState.activeNamingRightsOffer!!,
+                onSelectSponsor = { offerId -> viewModel.selectNamingRightsOffer(offerId) }
+            )
+        }
+
+        uiState.rivalLeague.activeAbsorptionNegotiation?.let { negotiationEvent ->
+            RivalAbsorptionNegotiationModal(
+                event = negotiationEvent,
+                onToggleCandidate = { candId -> viewModel.toggleRivalAbsorptionCandidate(candId) },
+                onAcceptAbsorption = { viewModel.resolveRivalAbsorptionNegotiation(acceptAbsorption = true) },
+                onRejectMerger = { viewModel.resolveRivalAbsorptionNegotiation(acceptAbsorption = false) }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ActiveScreenContent(
+    uiState: com.example.viewmodel.LeagueUiState,
+    viewModel: LeagueViewModel,
+    snackbarHostState: SnackbarHostState,
+    activeSnackbarAlert: DashboardSnackbarEvent?
+) {
     if (uiState.showBroadcastNegotiationsScreen) {
         BroadcastNegotiationsScreen(uiState = uiState, viewModel = viewModel)
         return
@@ -330,7 +387,6 @@ fun MainAppContent(viewModel: LeagueViewModel) {
                 5 -> StandingsScheduleScreen(uiState = uiState, viewModel = viewModel)
             }
 
-            // High-Stakes Commissioner Dilemma Modal (if triggered)
             if (uiState.activeDilemma != null) {
                 DilemmaDialog(
                     dilemma = uiState.activeDilemma!!,
@@ -340,7 +396,6 @@ fun MainAppContent(viewModel: LeagueViewModel) {
                 )
             }
 
-            // New League Inauguration Dialog
             if (uiState.showNewLeagueDialog) {
                 NewLeagueDialog(
                     onDismiss = { viewModel.toggleNewLeagueDialog(false) },
@@ -350,7 +405,6 @@ fun MainAppContent(viewModel: LeagueViewModel) {
                 )
             }
 
-            // Triggered Labor Union Negotiation Overlay
             if (uiState.activeLaborNegotiationOverlay != null) {
                 LaborUnionNegotiationOverlay(
                     session = uiState.activeLaborNegotiationOverlay!!,
@@ -372,24 +426,6 @@ fun MainAppContent(viewModel: LeagueViewModel) {
                     freeAgentPoolSize = uiState.freeAgentPool.size,
                     onExecuteAction = { action -> viewModel.performRivalWatchAction(action) },
                     onDismiss = { viewModel.openRivalWatchModal(false) }
-                )
-            }
-
-            uiState.stadiumDealState.activeRelocationVote?.let { voteState ->
-                RelocationVoteModal(
-                    voteState = voteState,
-                    onSelectCity = { cityId -> viewModel.selectRelocationVoteCity(cityId) },
-                    onApproveRelocation = { viewModel.resolveRelocationVote(approve = true) },
-                    onVetoRelocation = { viewModel.resolveRelocationVote(approve = false) }
-                )
-            }
-
-            uiState.rivalLeague.activeAbsorptionNegotiation?.let { negotiationEvent ->
-                RivalAbsorptionNegotiationModal(
-                    event = negotiationEvent,
-                    onToggleCandidate = { candId -> viewModel.toggleRivalAbsorptionCandidate(candId) },
-                    onAcceptAbsorption = { viewModel.resolveRivalAbsorptionNegotiation(acceptAbsorption = true) },
-                    onRejectMerger = { viewModel.resolveRivalAbsorptionNegotiation(acceptAbsorption = false) }
                 )
             }
         }

@@ -309,7 +309,13 @@ data class JobSecurityLegacyState(
     val latestBreakdown: StakeholderScoreBreakdown,
     val pendingAnnualReview: AnnualPerformanceReview? = null,
     val reviewHistory: List<AnnualPerformanceReview> = emptyList(),
-    val lastUpdateHeadline: String = "Inaugural Board mandate established across Owners, Players, Fans & Media."
+    val lastUpdateHeadline: String = "Inaugural Board mandate established across Owners, Players, Fans & Media.",
+    val milestones: List<LeagueLegacyMilestone> = emptyList(),
+    val unlockedMilestonesCount: Int = 0,
+    val recordBroadcastAnnualMillions: Long = 65L,
+    val consecutiveLockoutFreeSeasons: Int = 0,
+    val maxConsecutiveChampionStreak: Int = 0,
+    val dynastyTeamName: String? = null
 ) {
     val securityTier: JobSecurityTier
         get() = JobSecurityTier.fromScore(jobSecurityScore)
@@ -366,7 +372,7 @@ object JobSecurityLegacyEngine {
     fun createInitialState(input: CommissionerPerformanceInput): JobSecurityLegacyState {
         val breakdown = evaluateStakeholders(input)
         val initialSecurity = breakdown.projectedJobSecurityScore.coerceIn(68, 86)
-        return JobSecurityLegacyState(
+        val base = JobSecurityLegacyState(
             jobSecurityScore = initialSecurity,
             legacyPoints = 120,
             contractYearsRemaining = 3,
@@ -376,8 +382,10 @@ object JobSecurityLegacyEngine {
             latestBreakdown = breakdown,
             pendingAnnualReview = null,
             reviewHistory = emptyList(),
-            lastUpdateHeadline = "Board confidence initialized at $initialSecurity% across all 4 league pillars."
+            lastUpdateHeadline = "Board confidence initialized at $initialSecurity% across all 4 league pillars.",
+            recordBroadcastAnnualMillions = input.activeBroadcast.annualPayoutMillions
         )
+        return LeagueLegacyTracker.evaluateAndUnlockMilestones(base, input, isSeasonRollover = false).updatedState
     }
 
     fun evaluateStakeholders(input: CommissionerPerformanceInput): StakeholderScoreBreakdown {
@@ -627,7 +635,8 @@ object JobSecurityLegacyEngine {
     fun recalculateLiveSecurity(
         current: JobSecurityLegacyState,
         input: CommissionerPerformanceInput,
-        eventNote: String? = null
+        eventNote: String? = null,
+        isSeasonRollover: Boolean = false
     ): JobSecurityLegacyState {
         val breakdown = evaluateStakeholders(input)
         val target = breakdown.projectedJobSecurityScore
@@ -644,12 +653,17 @@ object JobSecurityLegacyEngine {
                 )
             } else pending
         }
-        return current.copy(
+        val intermediate = current.copy(
             jobSecurityScore = blended,
             latestBreakdown = breakdown,
             pendingAnnualReview = refreshedPending,
             lastUpdateHeadline = eventNote ?: current.lastUpdateHeadline
         )
+        return LeagueLegacyTracker.evaluateAndUnlockMilestones(
+            current = intermediate,
+            input = input,
+            isSeasonRollover = isSeasonRollover
+        ).updatedState
     }
 
     fun generateAnnualReview(

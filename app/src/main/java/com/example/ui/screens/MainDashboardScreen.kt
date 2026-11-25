@@ -30,13 +30,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.LeagueRevenueHistoryEntity
+import com.example.data.LeagueState
+import com.example.model.BroadcastBidStatus
 import com.example.model.CoreSimulationState
 import com.example.model.DashboardSnackbarEvent
+import com.example.model.LeagueSimulationEngine
 import com.example.model.SeasonPhase
+import com.example.model.StadiumDealEngine
 import com.example.ui.components.DashboardSnackbarEffect
 import com.example.ui.components.DashboardSnackbarHost
 import com.example.ui.components.RechartsDualTrendLineChart
 import com.example.ui.components.RechartsExecutiveTrendsChart
+import com.example.ui.components.RechartsFiveYearRevenueChart
 import com.example.ui.theme.*
 import com.example.viewmodel.LeagueUiState
 import com.example.viewmodel.LeagueViewModel
@@ -53,6 +59,8 @@ fun MainDashboardScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val simulationState by viewModel.coreSimulationViewModel.simulationState.collectAsStateWithLifecycle()
+    val persistedLeagueState by viewModel.persistedLeagueState.collectAsStateWithLifecycle()
+    val fiveYearRevenueHistory by viewModel.fiveYearRevenueHistory.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var activeSnackbarAlert by remember { mutableStateOf<DashboardSnackbarEvent?>(null) }
 
@@ -99,10 +107,20 @@ fun MainDashboardScreen(
                 MainDashboardMetricsPanel(
                     uiState = uiState,
                     simulationState = simulationState,
+                    persistedLeagueState = persistedLeagueState,
+                    fiveYearRevenueHistory = fiveYearRevenueHistory,
                     onSeasonWeekClick = { viewModel.setSelectedTab(5) },
                     onBankBalanceClick = { viewModel.setSelectedTab(3) },
                     onFanSentimentClick = { viewModel.setSelectedTab(1) },
-                    onStrikeRiskClick = { viewModel.openLaborUnionScreen(true) }
+                    onStrikeRiskClick = { viewModel.openLaborUnionScreen(true) },
+                    onFranchisesClick = { viewModel.setSelectedTab(1) },
+                    onOpenBroadcast = { viewModel.openBroadcastNegotiations(true) },
+                    onOpenExpansion = { viewModel.openExpansionRequestsManagement(true) },
+                    onOpenFacilities = { viewModel.openFacilityHub() },
+                    onOpenSchedule = { viewModel.openScheduleCalendarScreen(true) },
+                    onOpenOffSeason = { viewModel.openOffSeasonSummit(true) },
+                    onOpenCrisisHub = { viewModel.openCrisisEventsScreen(true) },
+                    onOpenRivalWatch = { viewModel.openRivalWatchModal(true) }
                 )
             }
         }
@@ -206,6 +224,16 @@ fun MainDashboardMetricsPanel(
     onStrikeRiskClick: () -> Unit,
     onIntegrityClick: (() -> Unit)? = null,
     onJobSecurityClick: (() -> Unit)? = null,
+    persistedLeagueState: LeagueState? = null,
+    fiveYearRevenueHistory: List<LeagueRevenueHistoryEntity> = emptyList(),
+    onFranchisesClick: (() -> Unit)? = null,
+    onOpenBroadcast: (() -> Unit)? = null,
+    onOpenExpansion: (() -> Unit)? = null,
+    onOpenFacilities: (() -> Unit)? = null,
+    onOpenSchedule: (() -> Unit)? = null,
+    onOpenOffSeason: (() -> Unit)? = null,
+    onOpenCrisisHub: (() -> Unit)? = null,
+    onOpenRivalWatch: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val avgMorale = if (uiState.franchises.isNotEmpty()) {
@@ -374,9 +402,95 @@ fun MainDashboardMetricsPanel(
                 )
             }
 
+            // Core League Overview Row (Total Revenue, Active Franchises, Active Labor Union Status)
+            val liveRevenueProjection = remember(uiState.franchises, uiState.activeBroadcast, uiState.unionAgreement) {
+                LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
+                    franchises = uiState.franchises,
+                    activeBroadcast = uiState.activeBroadcast,
+                    unionAgreement = uiState.unionAgreement
+                )
+            }
+            val totalRevenueM = persistedLeagueState?.totalRevenueMillions
+                ?: liveRevenueProjection.annualLeagueRevenueMillions
+            val namingRevM = persistedLeagueState?.annualNamingRightsRevenueMillions
+                ?: liveRevenueProjection.totalNamingRightsRevenueMillions
+            val broadcastRevM = persistedLeagueState?.annualBroadcastRevenueMillions
+                ?: uiState.activeBroadcast.annualPayoutMillions
+            val franchiseCount = persistedLeagueState?.franchiseCount ?: uiState.franchises.size
+            val eastCount = uiState.franchises.count { it.conference == com.example.model.Conference.EASTERN }
+            val westCount = uiState.franchises.count { it.conference == com.example.model.Conference.WESTERN }
+            val isLockout = persistedLeagueState?.isLockoutActive ?: uiState.unionAgreement.isLockoutActive
+            val cbaYears = persistedLeagueState?.cbaYearsRemaining ?: uiState.unionAgreement.cbaYearsRemaining
+            val strikePct = persistedLeagueState?.strikeRisk ?: uiState.unionAgreement.strikeRisk
+            val salaryCapM = persistedLeagueState?.salaryCapMillions ?: uiState.unionAgreement.salaryCapMillions
+            val unionBadgeValue = when {
+                isLockout -> "Lockout"
+                cbaYears <= 1 -> "Expiring (${cbaYears}y)"
+                else -> "Active CBA"
+            }
+            val unionAccent = when {
+                isLockout || strikePct >= 50 -> CrimsonAlert
+                cbaYears <= 1 -> AmberWarning
+                else -> EmeraldAccent
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CompactExecutivePill(
+                    label = "Total Revenue",
+                    value = "\$${totalRevenueM}M/yr",
+                    subLabel = "TV \$${broadcastRevM}M • Naming \$${namingRevM}M",
+                    icon = Icons.Default.TrendingUp,
+                    accent = EmeraldAccent,
+                    onClick = onBankBalanceClick,
+                    modifier = Modifier.weight(1f),
+                    testTag = "dashboard_metric_total_revenue"
+                )
+                CompactExecutivePill(
+                    label = "Franchises",
+                    value = "$franchiseCount Clubs",
+                    subLabel = "${eastCount}E • ${westCount}W • Cap \$${salaryCapM}M",
+                    icon = Icons.Default.Groups,
+                    accent = CyanAccent,
+                    onClick = onFranchisesClick ?: onFanSentimentClick,
+                    modifier = Modifier.weight(1f),
+                    testTag = "dashboard_metric_franchise_count"
+                )
+                CompactExecutivePill(
+                    label = "Labor Union",
+                    value = unionBadgeValue,
+                    subLabel = "${cbaYears}y CBA • Strike ${strikePct}%",
+                    icon = Icons.Default.Handshake,
+                    accent = unionAccent,
+                    onClick = onStrikeRiskClick,
+                    modifier = Modifier.weight(1f),
+                    testTag = "dashboard_metric_labor_status"
+                )
+            }
+
+            UpcomingKeyDecisionsCard(
+                uiState = uiState,
+                onOpenLabor = onStrikeRiskClick,
+                onOpenFacilities = onOpenFacilities ?: onFanSentimentClick,
+                onOpenBroadcast = onOpenBroadcast ?: onBankBalanceClick,
+                onOpenExpansion = onOpenExpansion ?: onFranchisesClick ?: onFanSentimentClick,
+                onOpenCrisis = onOpenCrisisHub ?: onIntegrityClick ?: onSeasonWeekClick,
+                onOpenSchedule = onOpenSchedule ?: onSeasonWeekClick,
+                onOpenOffSeason = onOpenOffSeason ?: onSeasonWeekClick,
+                onOpenRivalWatch = onOpenRivalWatch ?: onSeasonWeekClick
+            )
+
             JobSecurityLegacyStripCard(
                 uiState = uiState,
                 onClick = { (onJobSecurityClick ?: onIntegrityClick)?.invoke() }
+            )
+
+            // 5-Year Room Database League Revenue Growth Line Chart
+            RechartsFiveYearRevenueChart(
+                records = fiveYearRevenueHistory,
+                modifier = Modifier.fillMaxWidth()
             )
 
             // League Financial Growth & Fan Sentiment Line Chart
@@ -389,6 +503,306 @@ fun MainDashboardMetricsPanel(
                 data = trendSeries,
                 modifier = Modifier.fillMaxWidth()
             )
+        }
+    }
+}
+
+private data class UpcomingDecisionSpec(
+    val key: String,
+    val badge: String,
+    val title: String,
+    val detail: String,
+    val accent: Color,
+    val actionLabel: String,
+    val onClick: () -> Unit
+)
+
+@Composable
+private fun UpcomingKeyDecisionsCard(
+    uiState: LeagueUiState,
+    onOpenLabor: () -> Unit,
+    onOpenFacilities: () -> Unit,
+    onOpenBroadcast: () -> Unit,
+    onOpenExpansion: () -> Unit,
+    onOpenCrisis: () -> Unit,
+    onOpenSchedule: () -> Unit,
+    onOpenOffSeason: () -> Unit,
+    onOpenRivalWatch: () -> Unit
+) {
+    val decisions = buildList {
+        if (uiState.unionAgreement.isLockoutActive) {
+            add(
+                UpcomingDecisionSpec(
+                    key = "lockout_accord",
+                    badge = "URGENT",
+                    title = "Ratify Emergency CBA Accord",
+                    detail = "Lockout active (${uiState.unionAgreement.lockoutWeeksLost}w lost) — play suspended until resolved.",
+                    accent = CrimsonAlert,
+                    actionLabel = "Negotiate",
+                    onClick = onOpenLabor
+                )
+            )
+        }
+        uiState.activeDilemma?.let { dilemma ->
+            add(
+                UpcomingDecisionSpec(
+                    key = "crisis_dilemma",
+                    badge = "CRISIS",
+                    title = dilemma.title,
+                    detail = "Stage ${dilemma.stageNumber}/${dilemma.totalStages} executive ruling awaiting commissioner call.",
+                    accent = CrimsonAlert,
+                    actionLabel = "Rule",
+                    onClick = onOpenCrisis
+                )
+            )
+        }
+        uiState.stadiumDealState.activeUltimatum?.let { ultimatum ->
+            add(
+                UpcomingDecisionSpec(
+                    key = "stadium_ultimatum",
+                    badge = "ARENA",
+                    title = "Stadium Deal: ${ultimatum.franchiseName}",
+                    detail = "${ultimatum.stadiumAge}y arena at ${ultimatum.stadiumCondition}% condition requires financing.",
+                    accent = AmberWarning,
+                    actionLabel = "Review",
+                    onClick = onOpenFacilities
+                )
+            )
+        }
+        uiState.stadiumDealState.activeNamingRightsOffer?.let { offer ->
+            add(
+                UpcomingDecisionSpec(
+                    key = "naming_rights",
+                    badge = "SPONSOR",
+                    title = "Naming Rights: ${offer.franchiseName}",
+                    detail = "${offer.offers.size} procedural sponsor bids ready to boost cap revenue.",
+                    accent = GoldPrimary,
+                    actionLabel = "Select",
+                    onClick = onOpenFacilities
+                )
+            )
+        }
+        uiState.rivalLeague.activeAbsorptionNegotiation?.let {
+            add(
+                UpcomingDecisionSpec(
+                    key = "rival_merger",
+                    badge = "MERGER",
+                    title = "Rival Merger: ${uiState.rivalLeague.name}",
+                    detail = "Absorb top rival clubs for a permanent TV broadcast boost.",
+                    accent = GoldPrimary,
+                    actionLabel = "Summit",
+                    onClick = onOpenRivalWatch
+                )
+            )
+        }
+        if (!uiState.unionAgreement.isLockoutActive &&
+            (uiState.unionAgreement.cbaYearsRemaining <= 2 || uiState.unionAgreement.strikeRisk >= 30 || uiState.activeLaborTrigger != null)
+        ) {
+            add(
+                UpcomingDecisionSpec(
+                    key = "cba_expiration",
+                    badge = "LABOR",
+                    title = "CBA Talks (${uiState.unionAgreement.cbaYearsRemaining}y Remaining)",
+                    detail = "Strike risk ${uiState.unionAgreement.strikeRisk}% • Salary Cap \$${uiState.unionAgreement.salaryCapMillions}M.",
+                    accent = if (uiState.unionAgreement.cbaYearsRemaining <= 1) CrimsonAlert else AmberWarning,
+                    actionLabel = "CBA",
+                    onClick = onOpenLabor
+                )
+            )
+        }
+        if (uiState.pendingExpansionRequests.isNotEmpty()) {
+            add(
+                UpcomingDecisionSpec(
+                    key = "expansion_bids",
+                    badge = "EXPANSION",
+                    title = "${uiState.pendingExpansionRequests.size} Expansion Application(s)",
+                    detail = "Evaluate market bids, new arena deals & expansion draft impact.",
+                    accent = CyanAccent,
+                    actionLabel = "Bids",
+                    onClick = onOpenExpansion
+                )
+            )
+        }
+        val activeBroadcastOffers = uiState.broadcastBiddingSession.offers.count { it.bidStatus != BroadcastBidStatus.WITHDRAWN }
+        if (activeBroadcastOffers > 0 || uiState.activeBroadcast.yearsRemaining <= 2 || uiState.broadcastBiddingSession.exclusivityExpired) {
+            add(
+                UpcomingDecisionSpec(
+                    key = "broadcast_bids",
+                    badge = "TV RIGHTS",
+                    title = "TV Broadcast Bids (${uiState.activeBroadcast.yearsRemaining}y left)",
+                    detail = if (uiState.broadcastBiddingSession.exclusivityExpired) {
+                        "Exclusivity expired — sign a partner to recover full TV payouts."
+                    } else {
+                        "$activeBroadcastOffers network offer(s) active • Current: \$${uiState.activeBroadcast.annualPayoutMillions}M/yr."
+                    },
+                    accent = if (uiState.broadcastBiddingSession.exclusivityExpired) AmberWarning else CyanAccent,
+                    actionLabel = "Negotiate",
+                    onClick = onOpenBroadcast
+                )
+            )
+        }
+        val atRiskArenas = uiState.franchises.count { StadiumDealEngine.qualifiesForUltimatum(it) }
+        if (uiState.stadiumDealState.activeUltimatum == null && atRiskArenas > 0) {
+            add(
+                UpcomingDecisionSpec(
+                    key = "aging_arenas",
+                    badge = "VENUES",
+                    title = "$atRiskArenas Aging Arena(s) Flagged",
+                    detail = "Stadiums >25 yrs & <50% condition face off-season ultimatums.",
+                    accent = AmberWarning,
+                    actionLabel = "Inspect",
+                    onClick = onOpenFacilities
+                )
+            )
+        }
+        val (milestoneTitle, milestoneDetail, milestoneAction, milestoneClick) = when (uiState.seasonPhase) {
+            SeasonPhase.OFF_SEASON -> listOf("Annual Off-Season Summit", "Complete awards, expansion, draft lottery & new schedule.", "Summit", onOpenOffSeason)
+            SeasonPhase.PLAYOFFS -> listOf("Championship Bracket & Rollover", "Advance playoff rounds toward the Finals & Off-Season Summit.", "Calendar", onOpenSchedule)
+            else -> when {
+                uiState.currentWeek < 7 -> listOf("All-Star Showcase Break (W7)", "Prep All-Star format in ${7 - uiState.currentWeek} week(s).", "Schedule", onOpenSchedule)
+                uiState.currentWeek <= uiState.ruleBook.tradeRules.tradeDeadlineWeek -> listOf(
+                    "Trade Deadline (W${uiState.ruleBook.tradeRules.tradeDeadlineWeek})",
+                    "Review contenders & cap moves in ${(uiState.ruleBook.tradeRules.tradeDeadlineWeek - uiState.currentWeek).coerceAtLeast(0)} week(s).",
+                    "Schedule",
+                    onOpenSchedule
+                )
+                else -> listOf(
+                    "Playoff Bracket Seeding (${uiState.totalWeeks}W)",
+                    "Regular season concludes in ${(uiState.totalWeeks - uiState.currentWeek).coerceAtLeast(0)} week(s).",
+                    "Schedule",
+                    onOpenSchedule
+                )
+            }
+        }
+        @Suppress("UNCHECKED_CAST")
+        add(
+            UpcomingDecisionSpec(
+                key = "season_milestone",
+                badge = "UPCOMING",
+                title = milestoneTitle as String,
+                detail = milestoneDetail as String,
+                accent = EmeraldAccent,
+                actionLabel = milestoneAction as String,
+                onClick = milestoneClick as () -> Unit
+            )
+        )
+    }.take(4)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("dashboard_upcoming_decisions_card")
+            .border(1.dp, GoldPrimary.copy(alpha = 0.45f), RoundedCornerShape(16.dp)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.EventNote,
+                        contentDescription = "Upcoming Key Decisions",
+                        tint = GoldPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "UPCOMING KEY DECISIONS",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        color = GoldPrimary,
+                        letterSpacing = 0.8.sp
+                    )
+                }
+                Surface(
+                    color = GoldPrimary.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "${decisions.size} ACTIVE",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        color = GoldPrimary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            decisions.forEach { item ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, item.accent.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .minimumInteractiveComponentSize()
+                        .clickable(onClick = item.onClick)
+                        .testTag("upcoming_decision_${item.key}")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Surface(
+                                    color = item.accent.copy(alpha = 0.18f),
+                                    shape = RoundedCornerShape(5.dp)
+                                ) {
+                                    Text(
+                                        text = item.badge,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = item.accent,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                    )
+                                }
+                                Text(
+                                    text = item.title,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Text(
+                                text = item.detail,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = item.actionLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black,
+                            color = item.accent
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -34,10 +34,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.LeagueRevenueHistoryEntity
 import com.example.model.DashboardTrendPoint
 import com.example.model.FinancialSnapshot
 import com.example.ui.theme.*
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -1555,6 +1557,388 @@ private fun ExecutiveSeriesTogglePill(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+        }
+    }
+}
+
+/**
+ * Recharts-inspired interactive Line & Area Chart plotting 5-Year Annual League Revenue Growth
+ * persisted in Room (`league_revenue_history`), with touch/drag scrubbing across seasons.
+ */
+@Composable
+fun RechartsFiveYearRevenueChart(
+    records: List<LeagueRevenueHistoryEntity>,
+    modifier: Modifier = Modifier,
+    lineColor: Color = EmeraldAccent
+) {
+    val displayRecords = remember(records) {
+        records.distinctBy { it.seasonYear }.sortedBy { it.seasonYear }.takeLast(5)
+    }
+    var selectedIndex by remember(displayRecords.size) { mutableStateOf<Int?>(null) }
+
+    val animatedProgress by animateFloatAsState(
+        targetValue = 1f,
+        animationSpec = tween(durationMillis = 700),
+        label = "five_year_revenue_anim"
+    )
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("recharts_five_year_revenue_chart"),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, lineColor.copy(alpha = 0.45f)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "5-YEAR REVENUE GROWTH • ROOM DB",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = GoldPrimary,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 0.9.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    val spanText = if (displayRecords.size >= 2) {
+                        "Annual Revenue (${displayRecords.first().seasonYear}–${displayRecords.last().seasonYear})"
+                    } else if (displayRecords.size == 1) {
+                        "Annual Revenue (${displayRecords.first().seasonYear} Baseline)"
+                    } else {
+                        "5-Year League Revenue Trajectory"
+                    }
+                    Text(
+                        text = spanText,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                if (displayRecords.isNotEmpty()) {
+                    val firstRev = displayRecords.first().totalRevenueMillions.coerceAtLeast(1L)
+                    val lastRev = displayRecords.last().totalRevenueMillions
+                    val growthPct = if (displayRecords.size >= 2) {
+                        (((lastRev - firstRev).toDouble() / firstRev.toDouble()) * 100.0)
+                    } else 0.0
+                    val isPositive = growthPct >= 0.0
+                    val badgeColor = if (displayRecords.size < 2) CyanAccent else if (isPositive) EmeraldAccent else CrimsonAlert
+                    val badgeLabel = when {
+                        displayRecords.size < 2 -> "Y${displayRecords.last().seasonYear}"
+                        else -> "${if (isPositive) "+" else ""}${String.format("%.1f", growthPct)}% (${displayRecords.size}Y)"
+                    }
+                    Surface(
+                        color = badgeColor.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .semantics(mergeDescendants = true) {}
+                            .testTag("five_year_revenue_growth_badge")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPositive) Icons.Default.TrendingUp else Icons.Default.TrendingDown,
+                                contentDescription = "Revenue Growth Indicator",
+                                tint = badgeColor,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = badgeLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = badgeColor
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (displayRecords.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(110.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Syncing 5-year revenue records from Room database...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                return@Column
+            }
+
+            val activeIndex = selectedIndex?.coerceIn(0, displayRecords.lastIndex) ?: displayRecords.lastIndex
+            val activeRecord = displayRecords[activeIndex]
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "\$${activeRecord.totalRevenueMillions}M / yr",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Black,
+                        color = lineColor,
+                        modifier = Modifier.testTag("five_year_revenue_headline")
+                    )
+                    Text(
+                        text = "TV \$${activeRecord.broadcastRevenueMillions}M • Sponsors \$${activeRecord.sponsorRevenueMillions}M • Naming \$${activeRecord.namingRightsRevenueMillions}M",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "${activeRecord.seasonYear}",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Black,
+                        color = GoldPrimary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            val rawMin = displayRecords.minOf { it.totalRevenueMillions }.toFloat()
+            val rawMax = displayRecords.maxOf { it.totalRevenueMillions }.toFloat()
+            val pad = ((rawMax - rawMin) * 0.22f).coerceAtLeast(18f)
+            val minRev = (rawMin - pad).coerceAtLeast(0f)
+            val maxRev = (rawMax + pad).coerceAtLeast(minRev + 20f)
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(156.dp)
+                    .testTag("five_year_revenue_canvas")
+                    .pointerInput(displayRecords) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                val itemWidth = size.width / (displayRecords.size - 1).coerceAtLeast(1)
+                                selectedIndex = (offset.x / itemWidth).roundToInt().coerceIn(0, displayRecords.lastIndex)
+                            },
+                            onDrag = { change, _ ->
+                                val itemWidth = size.width / (displayRecords.size - 1).coerceAtLeast(1)
+                                selectedIndex = (change.position.x / itemWidth).roundToInt().coerceIn(0, displayRecords.lastIndex)
+                            },
+                            onDragEnd = { selectedIndex = null },
+                            onDragCancel = { selectedIndex = null }
+                        )
+                    }
+                    .pointerInput(displayRecords) {
+                        detectTapGestures(
+                            onTap = { offset ->
+                                val itemWidth = size.width / (displayRecords.size - 1).coerceAtLeast(1)
+                                val idx = (offset.x / itemWidth).roundToInt().coerceIn(0, displayRecords.lastIndex)
+                                selectedIndex = if (selectedIndex == idx) null else idx
+                            }
+                        )
+                    }
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val width = size.width
+                    val height = size.height
+                    val paddingVertical = 12.dp.toPx()
+                    val paddingHorizontal = 8.dp.toPx()
+                    val graphWidth = (width - paddingHorizontal * 2f).coerceAtLeast(1f)
+                    val graphHeight = (height - paddingVertical * 2f).coerceAtLeast(1f)
+
+                    val gridLineColor = Color(0xFF334155).copy(alpha = 0.45f)
+                    for (i in 0..3) {
+                        val y = paddingVertical + (graphHeight / 3f) * i
+                        drawLine(
+                            color = gridLineColor,
+                            start = Offset(paddingHorizontal, y),
+                            end = Offset(width - paddingHorizontal, y),
+                            strokeWidth = 1.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
+                        )
+                    }
+
+                    if (displayRecords.size == 1) {
+                        val centerPt = Offset(width / 2f, paddingVertical + graphHeight / 2f)
+                        drawLine(
+                            color = lineColor.copy(alpha = 0.45f),
+                            start = Offset(paddingHorizontal, centerPt.y),
+                            end = Offset(width - paddingHorizontal, centerPt.y),
+                            strokeWidth = 2.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))
+                        )
+                        drawCircle(
+                            color = lineColor,
+                            radius = 6.dp.toPx(),
+                            center = centerPt
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = 2.5.dp.toPx(),
+                            center = centerPt
+                        )
+                        return@Canvas
+                    }
+
+                    val stepX = graphWidth / (displayRecords.size - 1).toFloat()
+                    val points = displayRecords.mapIndexed { idx, rec ->
+                        val normY = ((rec.totalRevenueMillions.toFloat() - minRev) / (maxRev - minRev).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        Offset(
+                            paddingHorizontal + idx * stepX,
+                            paddingVertical + graphHeight - (normY * graphHeight * animatedProgress)
+                        )
+                    }
+
+                    val strokePath = Path().apply {
+                        moveTo(points.first().x, points.first().y)
+                        for (i in 0 until points.size - 1) {
+                            val p0 = points[i]
+                            val p1 = points[i + 1]
+                            val cx = (p0.x + p1.x) / 2f
+                            cubicTo(cx, p0.y, cx, p1.y, p1.x, p1.y)
+                        }
+                    }
+
+                    val fillPath = Path().apply {
+                        addPath(strokePath)
+                        lineTo(points.last().x, paddingVertical + graphHeight)
+                        lineTo(points.first().x, paddingVertical + graphHeight)
+                        close()
+                    }
+
+                    drawPath(
+                        path = fillPath,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                lineColor.copy(alpha = 0.34f),
+                                lineColor.copy(alpha = 0.05f),
+                                Color.Transparent
+                            ),
+                            startY = paddingVertical,
+                            endY = paddingVertical + graphHeight
+                        )
+                    )
+
+                    drawPath(
+                        path = strokePath,
+                        color = lineColor,
+                        style = Stroke(width = 3.2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+
+                    points.forEachIndexed { idx, pt ->
+                        val isHovered = activeIndex == idx
+                        if (isHovered) {
+                            drawLine(
+                                color = GoldPrimary.copy(alpha = 0.65f),
+                                start = Offset(pt.x, paddingVertical),
+                                end = Offset(pt.x, paddingVertical + graphHeight),
+                                strokeWidth = 1.5.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
+                            )
+                            drawCircle(
+                                color = lineColor.copy(alpha = 0.3f),
+                                radius = 9.dp.toPx(),
+                                center = pt
+                            )
+                        }
+                        drawCircle(
+                            color = if (isHovered) GoldPrimary else lineColor,
+                            radius = if (isHovered) 5.5.dp.toPx() else 3.8.dp.toPx(),
+                            center = pt
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = if (isHovered) 2.2.dp.toPx() else 1.5.dp.toPx(),
+                            center = pt
+                        )
+                    }
+                }
+            }
+
+            // Year axis labels
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                displayRecords.forEachIndexed { idx, rec ->
+                    val isSel = activeIndex == idx
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "${rec.seasonYear}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isSel) GoldPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (isSel) FontWeight.Black else FontWeight.SemiBold,
+                            fontSize = 10.sp
+                        )
+                        Text(
+                            text = "\$${rec.totalRevenueMillions}M",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isSel) lineColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
+                            fontSize = 9.sp
+                        )
+                    }
+                }
+            }
+
+            // Room record footer tooltip
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics(mergeDescendants = true) {}
+                    .testTag("five_year_revenue_scrub_details")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Y${activeRecord.seasonYear} • ${activeRecord.franchiseCount} Clubs • Champ: ${activeRecord.championName}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Val \$${activeRecord.valuationMillions}M",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        color = GoldPrimary
+                    )
+                }
+            }
         }
     }
 }

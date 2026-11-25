@@ -970,7 +970,13 @@ object InitialLeagueData {
             localSponsorRevenueMillions = 42L,
             fanLoyalty = 78,
             stadiumAge = 22,
-            stadiumCondition = 64
+            stadiumCondition = 64,
+            stadium = TeamStadium(
+                sponsorName = "Gotham Financial",
+                sponsorTier = 2,
+                sponsorYearsLeft = 2,
+                namingRightsRevenue = 13L
+            )
         ),
         Franchise(
             id = "team_la",
@@ -997,7 +1003,13 @@ object InitialLeagueData {
             localSponsorRevenueMillions = 38L,
             fanLoyalty = 80,
             stadiumAge = 11,
-            stadiumCondition = 86
+            stadiumCondition = 86,
+            stadium = TeamStadium(
+                sponsorName = "Pacific Crest Bank",
+                sponsorTier = 2,
+                sponsorYearsLeft = 1,
+                namingRightsRevenue = 12L
+            )
         ),
         Franchise(
             id = "team_chicago",
@@ -1024,7 +1036,13 @@ object InitialLeagueData {
             localSponsorRevenueMillions = 30L,
             fanLoyalty = 84,
             stadiumAge = 25,
-            stadiumCondition = 51
+            stadiumCondition = 51,
+            stadium = TeamStadium(
+                sponsorName = "Heartland Mutual",
+                sponsorTier = 1,
+                sponsorYearsLeft = 2,
+                namingRightsRevenue = 6L
+            )
         ),
         Franchise(
             id = "team_austin",
@@ -1051,7 +1069,13 @@ object InitialLeagueData {
             localSponsorRevenueMillions = 35L,
             fanLoyalty = 82,
             stadiumAge = 8,
-            stadiumCondition = 91
+            stadiumCondition = 91,
+            stadium = TeamStadium(
+                sponsorName = "Lone Star Civic",
+                sponsorTier = 1,
+                sponsorYearsLeft = 1,
+                namingRightsRevenue = 5L
+            )
         ),
         Franchise(
             id = "team_vegas",
@@ -1078,7 +1102,13 @@ object InitialLeagueData {
             localSponsorRevenueMillions = 34L,
             fanLoyalty = 74,
             stadiumAge = 16,
-            stadiumCondition = 73
+            stadiumCondition = 73,
+            stadium = TeamStadium(
+                sponsorName = "NovaVault Crypto",
+                sponsorTier = 3,
+                sponsorYearsLeft = 3,
+                namingRightsRevenue = 24L
+            )
         ),
         Franchise(
             id = "team_seattle",
@@ -1105,7 +1135,13 @@ object InitialLeagueData {
             localSponsorRevenueMillions = 36L,
             fanLoyalty = 85,
             stadiumAge = 24,
-            stadiumCondition = 54
+            stadiumCondition = 54,
+            stadium = TeamStadium(
+                sponsorName = "Evergreen Cloud",
+                sponsorTier = 2,
+                sponsorYearsLeft = 3,
+                namingRightsRevenue = 14L
+            )
         )
     ).map { f ->
         f.copy(

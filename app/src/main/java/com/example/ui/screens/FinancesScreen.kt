@@ -124,12 +124,14 @@ fun FinancesScreen(
     // Revenue streams totals for Treasury Charts
     val broadcastRevAnnual = uiState.activeBroadcast.annualPayoutMillions * 0.15f
     val sponsorRevAnnual = (uiState.franchises.sumOf { it.localSponsorRevenueMillions } * 0.15f)
+    val namingRightsRevAnnual = (uiState.franchises.sumOf { it.stadium.namingRightsRevenue } * 0.15f)
     val expansionRevAnnual = uiState.franchises.size * 5f
     val luxuryTaxAnnual = uiState.financialSnapshots.sumOf { it.luxuryTaxRevenue.toDouble() }.toFloat().coerceAtLeast(3f)
 
     val revenueSlices = listOf(
         SliceItem("Broadcast Rights", broadcastRevAnnual, CyanAccent),
         SliceItem("Local Sponsors", sponsorRevAnnual, EmeraldAccent),
+        SliceItem("Naming Rights", namingRightsRevAnnual, AmberAccent),
         SliceItem("Expansion Fees", expansionRevAnnual, GoldPrimary),
         SliceItem("Luxury Tax", luxuryTaxAnnual, Color(0xFFA855F7))
     )
@@ -863,6 +865,7 @@ fun FinancesScreen(
                         // Inflows
                         LedgerRow(label = "Broadcast Rights Central Cut", amount = "+\$${String.format("%.1f", broadcastRevAnnual)}M", color = EmeraldAccent)
                         LedgerRow(label = "Local Franchise Sponsorship Tax (15%)", amount = "+\$${String.format("%.1f", sponsorRevAnnual)}M", color = EmeraldAccent)
+                        LedgerRow(label = "Stadium Naming Rights Pool (15%)", amount = "+\$${String.format("%.1f", namingRightsRevAnnual)}M", color = EmeraldAccent)
                         LedgerRow(label = "Franchise Expansion Buy-in Fees", amount = "+\$${String.format("%.1f", expansionRevAnnual)}M", color = EmeraldAccent)
                         LedgerRow(label = "Salary Cap Luxury Tax Penalties", amount = "+\$${String.format("%.1f", luxuryTaxAnnual)}M", color = EmeraldAccent)
 
@@ -877,7 +880,7 @@ fun FinancesScreen(
                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
 
                         // Net
-                        val netTotal = (broadcastRevAnnual + sponsorRevAnnual + expansionRevAnnual + luxuryTaxAnnual) - (opsExpense + marketingExpense + welfareExpense + recruitmentExpense)
+                        val netTotal = (broadcastRevAnnual + sponsorRevAnnual + namingRightsRevAnnual + expansionRevAnnual + luxuryTaxAnnual) - (opsExpense + marketingExpense + welfareExpense + recruitmentExpense)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1739,6 +1742,13 @@ fun FinancesScreen(
                     LedgerRow(label = "Local Arena Sponsorships & Luxury Boxes", amount = "+\$${stmt.localSponsorRevenueMillions}M", color = EmeraldAccent)
                     if (stmt.luxurySuiteRevenueMillions > 0.0) {
                         LedgerRow(label = "  ↳ VIP Luxury Suites Premium", amount = "+\$${stmt.luxurySuiteRevenueMillions}M", color = GoldPrimary)
+                    }
+                    if (stmt.namingRightsRevenueMillions > 0.0) {
+                        LedgerRow(
+                            label = "  ↳ Naming Rights (${franchise?.stadium?.sponsorName ?: "Deal"})",
+                            amount = "+\$${stmt.namingRightsRevenueMillions}M",
+                            color = AmberAccent
+                        )
                     }
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))

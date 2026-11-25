@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -109,23 +110,36 @@ fun JobSecurityLegacyScreen(
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("Coalition", fontWeight = FontWeight.Bold) },
+                    text = { Text("Coalition", fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     modifier = Modifier.testTag("tab_security_overview")
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
                     text = {
-                        val badge = if (secState.pendingAnnualReview != null) " (Ready)" else ""
-                        Text("Review$badge", fontWeight = FontWeight.Bold)
+                        val badge = if (secState.pendingAnnualReview != null) " *" else ""
+                        Text("Review$badge", fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     },
                     modifier = Modifier.testTag("tab_security_review")
                 )
                 Tab(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
-                    text = { Text("Ledger (${secState.reviewHistory.size})", fontWeight = FontWeight.Bold) },
+                    text = { Text("Ledger (${secState.reviewHistory.size})", fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     modifier = Modifier.testTag("tab_security_ledger")
+                )
+                Tab(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    text = {
+                        Text(
+                            text = "Legacy (${secState.unlockedMilestonesCount}/${secState.milestones.size})",
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    modifier = Modifier.testTag("tab_legacy_milestones")
                 )
             }
 
@@ -263,6 +277,15 @@ fun JobSecurityLegacyScreen(
                             }
                         }
                     }
+
+                    3 -> {
+                        item(key = "legacy_tracker_summary") {
+                            LegacyMilestoneTrackerSummaryCard(secState = secState)
+                        }
+                        items(secState.milestones, key = { it.id.name }) { milestone ->
+                            LegacyMilestoneCard(milestone = milestone)
+                        }
+                    }
                 }
             }
         }
@@ -376,6 +399,38 @@ fun JobSecurityLegacyStripCard(
                         }
                     }
                 }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = GoldPrimary.copy(alpha = 0.14f),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.testTag("strip_legacy_milestones_badge")
+                ) {
+                    Text(
+                        text = "${secState.unlockedMilestonesCount}/${secState.milestones.size} Legacy Milestones",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                        color = GoldPrimary,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                    )
+                }
+                val unlockedPreview = secState.milestones.lastOrNull { it.isUnlocked }?.title
+                    ?: "Tap to track Dynasty & TV Mogul goals"
+                Text(
+                    text = unlockedPreview,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
             }
         }
     }
@@ -963,6 +1018,245 @@ private fun HistoricalReviewCard(review: AnnualPerformanceReview) {
                 fontWeight = FontWeight.Bold,
                 color = GoldPrimary
             )
+        }
+    }
+}
+
+@Composable
+private fun LegacyMilestoneTrackerSummaryCard(secState: JobSecurityLegacyState) {
+    val legColor = Color(secState.legacyTier.colorHex)
+    val totalCount = secState.milestones.size.coerceAtLeast(1)
+    val unlockProgress by animateFloatAsState(
+        targetValue = (secState.unlockedMilestonesCount.toFloat() / totalCount.toFloat()).coerceIn(0f, 1f),
+        animationSpec = spring(stiffness = 280f),
+        label = "legacyMilestonesProgress"
+    )
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(1.dp, GoldPrimary.copy(alpha = 0.55f)),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("legacy_tracker_summary_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "LEAGUE LEGACY TRACKER",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        color = GoldPrimary,
+                        letterSpacing = 0.8.sp
+                    )
+                    Text(
+                        text = "${secState.unlockedMilestonesCount} of ${secState.milestones.size} Commissioner Milestones",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+                Surface(
+                    color = legColor.copy(alpha = 0.18f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "${secState.legacyPoints} Pts",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Black,
+                        color = legColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            LinearProgressIndicator(
+                progress = { unlockProgress },
+                color = GoldPrimary,
+                trackColor = MaterialTheme.colorScheme.surface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            text = "DYNASTY STREAK",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = if (secState.maxConsecutiveChampionStreak > 0) {
+                                "${secState.maxConsecutiveChampionStreak} Title(s) • ${secState.dynastyTeamName ?: "Active"}"
+                            } else {
+                                "0 Titles Recorded"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = GoldPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            text = "PEAK TV CONTRACT",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "\$${secState.recordBroadcastAnnualMillions}M / yr",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black,
+                            color = CyanAccent
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LegacyMilestoneCard(milestone: LeagueLegacyMilestone) {
+    val accent = Color(milestone.category.colorHex)
+    val badgeColor = if (milestone.isUnlocked) EmeraldAccent else accent
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        border = BorderStroke(
+            width = if (milestone.isUnlocked) 1.5.dp else 1.dp,
+            color = badgeColor.copy(alpha = if (milestone.isUnlocked) 0.7f else 0.35f)
+        ),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {}
+            .testTag("card_legacy_milestone_${milestone.id.name}")
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(badgeColor.copy(alpha = 0.16f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (milestone.isUnlocked) Icons.Default.EmojiEvents else Icons.Default.Flag,
+                            contentDescription = milestone.title,
+                            tint = badgeColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = milestone.category.title.uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            color = accent
+                        )
+                        Text(
+                            text = milestone.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Surface(
+                        color = badgeColor.copy(alpha = 0.18f),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = if (milestone.isUnlocked) {
+                                "UNLOCKED Y${milestone.unlockedYear ?: 2026}"
+                            } else {
+                                "${milestone.currentProgress}/${milestone.targetProgress}"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black,
+                            color = badgeColor,
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "+${milestone.rewardLegacyPoints} Pts",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = GoldPrimary,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+
+            Text(
+                text = milestone.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            LinearProgressIndicator(
+                progress = { milestone.progressFraction },
+                color = badgeColor,
+                trackColor = MaterialTheme.colorScheme.surface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(7.dp)
+                    .clip(RoundedCornerShape(4.dp))
+            )
+
+            if (milestone.progressNote.isNotBlank()) {
+                Text(
+                    text = milestone.progressNote,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (milestone.isUnlocked) EmeraldLight else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

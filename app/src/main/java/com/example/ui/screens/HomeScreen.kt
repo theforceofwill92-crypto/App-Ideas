@@ -72,6 +72,8 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val simulationState by viewModel.coreSimulationViewModel.simulationState.collectAsStateWithLifecycle()
+    val persistedLeagueState by viewModel.persistedLeagueState.collectAsStateWithLifecycle()
+    val fiveYearRevenueHistory by viewModel.fiveYearRevenueHistory.collectAsStateWithLifecycle()
 
     // Prepare grouped Hub metrics outside LazyListScope
     val discState = uiState.disciplinaryState
@@ -329,12 +331,22 @@ fun HomeScreen(
             MainDashboardMetricsPanel(
                 uiState = uiState,
                 simulationState = simulationState,
+                persistedLeagueState = persistedLeagueState,
+                fiveYearRevenueHistory = fiveYearRevenueHistory,
                 onSeasonWeekClick = { viewModel.setSelectedTab(5) },
                 onBankBalanceClick = { viewModel.setSelectedTab(3) },
                 onFanSentimentClick = { viewModel.openFanSentimentScreen(true) },
                 onStrikeRiskClick = { viewModel.openLaborUnionScreen(true) },
                 onIntegrityClick = { viewModel.openOfficiatingHub(true) },
                 onJobSecurityClick = { viewModel.openJobSecurityLegacyScreen(true) },
+                onFranchisesClick = { viewModel.setSelectedTab(1) },
+                onOpenBroadcast = { viewModel.openBroadcastNegotiations(true) },
+                onOpenExpansion = { viewModel.openExpansionRequestsManagement(true) },
+                onOpenFacilities = { viewModel.openFacilityHub() },
+                onOpenSchedule = { viewModel.openScheduleCalendarScreen(true) },
+                onOpenOffSeason = { viewModel.openOffSeasonSummit(true) },
+                onOpenCrisisHub = { viewModel.openCrisisEventsScreen(true) },
+                onOpenRivalWatch = { viewModel.openRivalWatchModal(true) },
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
             Spacer(modifier = Modifier.height(12.dp))
