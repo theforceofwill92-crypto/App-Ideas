@@ -23,7 +23,8 @@ object LeagueSimulationEngine {
         rivalryTicketBonusMillions: Double,
         fanGrowthBonusPct: Double,
         facilityValuationGainMillions: Long,
-        specialEventBonusMillions: Double = 0.0
+        specialEventBonusMillions: Double = 0.0,
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
     ): WeeklyRevenueBreakdown {
         val exclusivityMultiplier = if (activeBroadcast.hasExclusivity) {
             1.0
@@ -34,10 +35,11 @@ object LeagueSimulationEngine {
         val weeklyNamingRightsRevenue = franchises.sumOf {
             it.stadium.namingRightsRevenue.coerceAtLeast(0L).toDouble()
         } / 16.0
+        val weeklyLeagueSponsorsRevenue = leagueSponsors.totalAnnualPayoutMillions.coerceAtLeast(0L).toDouble() / 16.0
         val weeklySponsorRevenue = (franchises.sumOf {
             (it.localSponsorRevenueMillions + it.facilities.annualSuitePremiumMillions) *
                 FanLoyaltyEngine.sponsorLoyaltyMultiplier(it.fanLoyalty)
-        } / 16.0) + weeklyNamingRightsRevenue
+        } / 16.0) + weeklyNamingRightsRevenue + weeklyLeagueSponsorsRevenue
 
         val avgLoyalty = if (franchises.isNotEmpty()) franchises.map { it.fanLoyalty }.average() else 75.0
         val rawLoyaltyGateShare = (((avgLoyalty - 65.0) / 100.0) * franchises.size * 0.9).coerceAtLeast(0.0)
@@ -116,6 +118,7 @@ object LeagueSimulationEngine {
 
     data class AnnualRevenueAndCapProjection(
         val totalNamingRightsRevenueMillions: Long,
+        val totalLeagueSponsorsRevenueMillions: Long = 0L,
         val annualLeagueRevenueMillions: Long,
         val previousSalaryCapMillions: Long,
         val salaryCapIncreaseMillions: Long,
@@ -125,17 +128,27 @@ object LeagueSimulationEngine {
     fun calculateAnnualLeagueRevenueAndNextCap(
         franchises: List<Franchise>,
         activeBroadcast: BroadcastContract,
-        unionAgreement: LaborUnionAgreement
+        unionAgreement: LaborUnionAgreement,
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
     ): AnnualRevenueAndCapProjection {
         val teamCount = franchises.size.coerceAtLeast(1)
         val totalNamingRights = franchises.sumOf { it.stadium.namingRightsRevenue.coerceAtLeast(0L) }
+        val totalLeagueSponsors = leagueSponsors.totalAnnualPayoutMillions.coerceAtLeast(0L)
         val totalFranchiseAnnualRevenue = franchises.sumOf {
             it.calculateFinancialStatement(activeBroadcast, teamCount).totalRevenueMillions
         }.roundToLong()
-        val annualLeagueRevenue = totalFranchiseAnnualRevenue + (activeBroadcast.annualPayoutMillions * 0.15).roundToLong()
+        val annualLeagueRevenue = totalFranchiseAnnualRevenue +
+            (activeBroadcast.annualPayoutMillions * 0.15).roundToLong() +
+            totalLeagueSponsors
 
         val namingRightsCapBoost = if (totalNamingRights > 0L) {
             ((totalNamingRights.toDouble() / teamCount) * (unionAgreement.playerRevenueSharePct / 100.0))
+                .roundToLong()
+                .coerceAtLeast(1L)
+        } else 0L
+
+        val leagueSponsorsCapBoost = if (totalLeagueSponsors > 0L) {
+            ((totalLeagueSponsors.toDouble() / teamCount) * (unionAgreement.playerRevenueSharePct / 100.0))
                 .roundToLong()
                 .coerceAtLeast(1L)
         } else 0L
@@ -146,16 +159,111 @@ object LeagueSimulationEngine {
             ((activeBroadcast.annualPayoutMillions / teamCount) / 8L).coerceIn(1L, 4L)
         }
 
-        val capIncrease = (baseOrganicCapGrowth + namingRightsCapBoost).coerceAtLeast(0L)
-        val nextCap = (unionAgreement.salaryCapMillions + capIncrease).coerceIn(60L, 260L)
+        val capIncrease = (baseOrganicCapGrowth + namingRightsCapBoost + leagueSponsorsCapBoost).coerceAtLeast(0L)
+        val nextCap = (unionAgreement.salaryCapMillions + capIncrease).coerceIn(60L, 320L)
 
         return AnnualRevenueAndCapProjection(
             totalNamingRightsRevenueMillions = totalNamingRights,
+            totalLeagueSponsorsRevenueMillions = totalLeagueSponsors,
             annualLeagueRevenueMillions = annualLeagueRevenue,
             previousSalaryCapMillions = unionAgreement.salaryCapMillions,
             salaryCapIncreaseMillions = (nextCap - unionAgreement.salaryCapMillions).coerceAtLeast(0L),
             nextSalaryCapMillions = nextCap
         )
+    }
+
+    data class FranchiseBroadcastTrendPoint(
+        val seasonYear: Int,
+        val franchiseId: String,
+        val franchiseName: String,
+        val tvContractRevenueMillions: Double,
+        val streamingContractRevenueMillions: Double,
+        val totalBroadcastRevenueMillions: Double,
+        val platformLabel: String
+    )
+
+    fun buildFiveSeasonFranchiseBroadcastTrends(
+        franchise: Franchise?,
+        records: List<com.example.data.LeagueRevenueHistoryEntity>,
+        activeBroadcast: BroadcastContract,
+        totalFranchises: Int,
+        currentYear: Int
+    ): List<FranchiseBroadcastTrendPoint> {
+        val teamCount = totalFranchises.coerceAtLeast(1)
+        val franchiseId = franchise?.id ?: "league_avg"
+        val franchiseName = franchise?.teamFullName ?: "League Average"
+        val sortedRecords = records.distinctBy { it.seasonYear }.sortedBy { it.seasonYear }.takeLast(5)
+
+        val marketMediaFactor = if (franchise != null) {
+            val fanRatio = (franchise.fanBaseMillions / 1.8).coerceIn(0.82, 1.32)
+            val ownerBonus = 1.0 + ((franchise.ownership.ownerApproval - 75) / 120.0)
+            (fanRatio * 0.65 + ownerBonus * 0.35).coerceIn(0.80, 1.38)
+        } else 1.0
+        val baseRsnAnnual = ((franchise?.localSponsorRevenueMillions ?: 24L) * 0.55).coerceAtLeast(8.0)
+
+        fun splitForYear(
+            totalNationalBroadcastMillions: Long,
+            storedTvMillions: Long,
+            storedStreamingMillions: Long,
+            yearsBack: Int
+        ): Pair<Double, Double> {
+            val natTv: Double
+            val natStream: Double
+            if (storedTvMillions > 0L || storedStreamingMillions > 0L) {
+                natTv = storedTvMillions.toDouble()
+                natStream = storedStreamingMillions.toDouble()
+            } else {
+                val baseStreamShare = when (activeBroadcast.platform) {
+                    BroadcastPlatform.GLOBAL_STREAMER -> 0.72
+                    BroadcastPlatform.HYBRID_SYNDICATE -> 0.48
+                    BroadcastPlatform.LINEAR_CABLE -> 0.30
+                    BroadcastPlatform.FREE_TO_AIR -> 0.18
+                }
+                val streamShare = (baseStreamShare - (yearsBack * 0.045)).coerceIn(0.12, 0.78)
+                natStream = totalNationalBroadcastMillions * streamShare
+                natTv = (totalNationalBroadcastMillions - natStream).coerceAtLeast(0.0)
+            }
+            val seasonHistoryScale = (1.0 - (yearsBack * 0.04)).coerceIn(0.80, 1.04)
+            val franchiseTvCut = ((natTv / teamCount) * (0.72 + 0.28 * marketMediaFactor)) +
+                (baseRsnAnnual * 0.68 * seasonHistoryScale)
+            val franchiseStreamingCut = ((natStream / teamCount) * (0.65 + 0.35 * marketMediaFactor)) +
+                (baseRsnAnnual * 0.32 * (1.0 + ((4 - yearsBack) * 0.05)) * seasonHistoryScale)
+            val roundedTv = Math.round(franchiseTvCut * 10.0) / 10.0
+            val roundedStream = Math.round(franchiseStreamingCut * 10.0) / 10.0
+            return roundedTv to roundedStream
+        }
+
+        val anchorYear = sortedRecords.lastOrNull()?.seasonYear ?: currentYear
+        val anchorTotalBroadcast = (sortedRecords.lastOrNull()?.broadcastRevenueMillions
+            ?: activeBroadcast.annualPayoutMillions).coerceAtLeast(20L)
+
+        val recordMap = sortedRecords.associateBy { it.seasonYear }
+        val targetYears = ((anchorYear - 4)..anchorYear).toList()
+
+        return targetYears.map { year ->
+            val yearsBack = (anchorYear - year).coerceAtLeast(0)
+            val rec = recordMap[year]
+            val nationalBroadcast = if (rec != null && rec.broadcastRevenueMillions > 0L) {
+                rec.broadcastRevenueMillions
+            } else {
+                kotlin.math.round(anchorTotalBroadcast * (1.0 - (yearsBack * 0.075)).coerceAtLeast(0.62)).toLong()
+            }
+            val (tvCut, streamCut) = splitForYear(
+                totalNationalBroadcastMillions = nationalBroadcast,
+                storedTvMillions = rec?.tvBroadcastRevenueMillions ?: 0L,
+                storedStreamingMillions = rec?.streamingBroadcastRevenueMillions ?: 0L,
+                yearsBack = yearsBack
+            )
+            FranchiseBroadcastTrendPoint(
+                seasonYear = year,
+                franchiseId = franchiseId,
+                franchiseName = franchiseName,
+                tvContractRevenueMillions = tvCut,
+                streamingContractRevenueMillions = streamCut,
+                totalBroadcastRevenueMillions = Math.round((tvCut + streamCut) * 10.0) / 10.0,
+                platformLabel = activeBroadcast.platform.label
+            )
+        }
     }
 
     fun calculatePlayoffRoundRevenue(

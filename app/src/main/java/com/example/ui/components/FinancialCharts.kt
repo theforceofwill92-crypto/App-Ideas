@@ -10,11 +10,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.*
@@ -35,8 +38,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.LeagueRevenueHistoryEntity
+import com.example.model.BroadcastContract
 import com.example.model.DashboardTrendPoint
 import com.example.model.FinancialSnapshot
+import com.example.model.Franchise
+import com.example.model.LeagueSimulationEngine
 import com.example.ui.theme.*
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -1937,6 +1943,474 @@ fun RechartsFiveYearRevenueChart(
                         fontWeight = FontWeight.Black,
                         color = GoldPrimary
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Recharts-style Multi-Series Interactive Chart plotting franchise revenue trends
+ * from Television and Streaming broadcast contracts over the last five seasons.
+ */
+@Composable
+fun RechartsFiveYearBroadcastContractsChart(
+    franchises: List<Franchise>,
+    records: List<LeagueRevenueHistoryEntity>,
+    activeBroadcast: BroadcastContract,
+    currentYear: Int,
+    managedFranchiseId: String? = null,
+    modifier: Modifier = Modifier,
+    tvColor: Color = CyanAccent,
+    streamingColor: Color = EmeraldAccent
+) {
+    var selectedFranchiseId by remember(managedFranchiseId, franchises.size) {
+        mutableStateOf(
+            managedFranchiseId?.takeIf { id -> franchises.any { it.id == id } }
+                ?: franchises.firstOrNull()?.id
+        )
+    }
+    var selectedIndex by remember { mutableStateOf<Int?>(null) }
+
+    val selectedFranchise = remember(franchises, selectedFranchiseId) {
+        franchises.find { it.id == selectedFranchiseId } ?: franchises.firstOrNull()
+    }
+    val trendPoints = remember(selectedFranchise, records, activeBroadcast, franchises.size, currentYear) {
+        LeagueSimulationEngine.buildFiveSeasonFranchiseBroadcastTrends(
+            franchise = selectedFranchise,
+            records = records,
+            activeBroadcast = activeBroadcast,
+            totalFranchises = franchises.size.coerceAtLeast(1),
+            currentYear = currentYear
+        )
+    }
+
+    val animatedProgress by animateFloatAsState(
+        targetValue = 1f,
+        animationSpec = tween(durationMillis = 700),
+        label = "five_year_broadcast_contracts_anim"
+    )
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("recharts_broadcast_contracts_chart"),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, tvColor.copy(alpha = 0.45f)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .background(tvColor.copy(alpha = 0.16f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LiveTv,
+                            contentDescription = "Franchise TV and Streaming Broadcast Contracts Chart",
+                            tint = tvColor,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "BROADCAST CONTRACTS • LAST 5 SEASONS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = GoldPrimary,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 0.8.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${selectedFranchise?.teamFullName ?: "League Average"} (TV & Streaming)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                if (trendPoints.size >= 2) {
+                    val firstTotal = trendPoints.first().totalBroadcastRevenueMillions.coerceAtLeast(0.1)
+                    val lastTotal = trendPoints.last().totalBroadcastRevenueMillions
+                    val growthPct = ((lastTotal - firstTotal) / firstTotal) * 100.0
+                    val isPositive = growthPct >= 0.0
+                    val badgeColor = if (isPositive) EmeraldAccent else CrimsonAlert
+                    Surface(
+                        color = badgeColor.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .semantics(mergeDescendants = true) {}
+                            .testTag("broadcast_trends_growth_badge")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPositive) Icons.Default.TrendingUp else Icons.Default.TrendingDown,
+                                contentDescription = "Broadcast Contract Growth Indicator",
+                                tint = badgeColor,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "${if (isPositive) "+" else ""}${String.format("%.1f", growthPct)}% (5Y)",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = badgeColor
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (franchises.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(franchises, key = { it.id }) { team ->
+                        val isSelected = team.id == selectedFranchise?.id
+                        val teamTint = Color(team.colorHex)
+                        Surface(
+                            color = if (isSelected) teamTint.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(20.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSelected) GoldPrimary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                            ),
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable {
+                                    selectedFranchiseId = team.id
+                                    selectedIndex = null
+                                }
+                                .testTag("chip_broadcast_trend_franchise_${team.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(teamTint)
+                                )
+                                Text(
+                                    text = team.nickname,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isSelected) FontWeight.Black else FontWeight.SemiBold,
+                                    color = if (isSelected) GoldPrimary else MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Legend row: Television Contracts vs Streaming Contracts
+            val activeIdx = selectedIndex?.coerceIn(0, (trendPoints.size - 1).coerceAtLeast(0))
+                ?: (trendPoints.size - 1).coerceAtLeast(0)
+            val activePoint = trendPoints.getOrNull(activeIdx)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(tvColor)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "Television Contracts",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = tvColor
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(streamingColor)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "Streaming Contracts",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = streamingColor
+                        )
+                    }
+                }
+                if (activePoint != null) {
+                    Text(
+                        text = "${activePoint.seasonYear}",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Black,
+                        color = GoldPrimary
+                    )
+                }
+            }
+
+            if (trendPoints.isEmpty()) return@Column
+
+            val rawMax = trendPoints.maxOf {
+                maxOf(it.tvContractRevenueMillions, it.streamingContractRevenueMillions)
+            }.toFloat()
+            val rawMin = trendPoints.minOf {
+                minOf(it.tvContractRevenueMillions, it.streamingContractRevenueMillions)
+            }.toFloat()
+            val yPad = ((rawMax - rawMin) * 0.25f).coerceAtLeast(3f)
+            val minY = (rawMin - yPad).coerceAtLeast(0f)
+            val maxY = (rawMax + yPad).coerceAtLeast(minY + 6f)
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp)
+                    .testTag("broadcast_trends_canvas")
+                    .pointerInput(trendPoints) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                val itemWidth = size.width / (trendPoints.size - 1).coerceAtLeast(1)
+                                selectedIndex = (offset.x / itemWidth).roundToInt().coerceIn(0, trendPoints.lastIndex)
+                            },
+                            onDrag = { change, _ ->
+                                val itemWidth = size.width / (trendPoints.size - 1).coerceAtLeast(1)
+                                selectedIndex = (change.position.x / itemWidth).roundToInt().coerceIn(0, trendPoints.lastIndex)
+                            },
+                            onDragEnd = { selectedIndex = null },
+                            onDragCancel = { selectedIndex = null }
+                        )
+                    }
+                    .pointerInput(trendPoints) {
+                        detectTapGestures(
+                            onTap = { offset ->
+                                val itemWidth = size.width / (trendPoints.size - 1).coerceAtLeast(1)
+                                val idx = (offset.x / itemWidth).roundToInt().coerceIn(0, trendPoints.lastIndex)
+                                selectedIndex = if (selectedIndex == idx) null else idx
+                            }
+                        )
+                    }
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val width = size.width
+                    val height = size.height
+                    val paddingVertical = 12.dp.toPx()
+                    val paddingHorizontal = 8.dp.toPx()
+                    val graphWidth = (width - paddingHorizontal * 2f).coerceAtLeast(1f)
+                    val graphHeight = (height - paddingVertical * 2f).coerceAtLeast(1f)
+
+                    val gridLineColor = Color(0xFF334155).copy(alpha = 0.45f)
+                    for (i in 0..3) {
+                        val y = paddingVertical + (graphHeight / 3f) * i
+                        drawLine(
+                            color = gridLineColor,
+                            start = Offset(paddingHorizontal, y),
+                            end = Offset(width - paddingHorizontal, y),
+                            strokeWidth = 1.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
+                        )
+                    }
+
+                    if (trendPoints.size < 2) return@Canvas
+
+                    val stepX = graphWidth / (trendPoints.size - 1).toFloat()
+                    val tvPts = trendPoints.mapIndexed { idx, pt ->
+                        val normY = ((pt.tvContractRevenueMillions.toFloat() - minY) / (maxY - minY).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        Offset(
+                            paddingHorizontal + idx * stepX,
+                            paddingVertical + graphHeight - (normY * graphHeight * animatedProgress)
+                        )
+                    }
+                    val streamPts = trendPoints.mapIndexed { idx, pt ->
+                        val normY = ((pt.streamingContractRevenueMillions.toFloat() - minY) / (maxY - minY).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        Offset(
+                            paddingHorizontal + idx * stepX,
+                            paddingVertical + graphHeight - (normY * graphHeight * animatedProgress)
+                        )
+                    }
+
+                    fun buildSmoothPath(pts: List<Offset>): Path = Path().apply {
+                        moveTo(pts.first().x, pts.first().y)
+                        for (i in 0 until pts.size - 1) {
+                            val p0 = pts[i]
+                            val p1 = pts[i + 1]
+                            val cx = (p0.x + p1.x) / 2f
+                            cubicTo(cx, p0.y, cx, p1.y, p1.x, p1.y)
+                        }
+                    }
+
+                    val tvStroke = buildSmoothPath(tvPts)
+                    val tvFill = Path().apply {
+                        addPath(tvStroke)
+                        lineTo(tvPts.last().x, paddingVertical + graphHeight)
+                        lineTo(tvPts.first().x, paddingVertical + graphHeight)
+                        close()
+                    }
+                    drawPath(
+                        path = tvFill,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(tvColor.copy(alpha = 0.25f), Color.Transparent),
+                            startY = paddingVertical,
+                            endY = paddingVertical + graphHeight
+                        )
+                    )
+                    drawPath(
+                        path = tvStroke,
+                        color = tvColor,
+                        style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+
+                    val streamStroke = buildSmoothPath(streamPts)
+                    val streamFill = Path().apply {
+                        addPath(streamStroke)
+                        lineTo(streamPts.last().x, paddingVertical + graphHeight)
+                        lineTo(streamPts.first().x, paddingVertical + graphHeight)
+                        close()
+                    }
+                    drawPath(
+                        path = streamFill,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(streamingColor.copy(alpha = 0.22f), Color.Transparent),
+                            startY = paddingVertical,
+                            endY = paddingVertical + graphHeight
+                        )
+                    )
+                    drawPath(
+                        path = streamStroke,
+                        color = streamingColor,
+                        style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+
+                    val guideX = tvPts[activeIdx].x
+                    drawLine(
+                        color = GoldPrimary.copy(alpha = 0.55f),
+                        start = Offset(guideX, paddingVertical),
+                        end = Offset(guideX, paddingVertical + graphHeight),
+                        strokeWidth = 1.4.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
+                    )
+
+                    tvPts.forEachIndexed { idx, pt ->
+                        val isSel = activeIdx == idx
+                        drawCircle(color = if (isSel) GoldPrimary else tvColor, radius = if (isSel) 5.dp.toPx() else 3.5.dp.toPx(), center = pt)
+                        drawCircle(color = Color.White, radius = 1.6.dp.toPx(), center = pt)
+                    }
+                    streamPts.forEachIndexed { idx, pt ->
+                        val isSel = activeIdx == idx
+                        drawCircle(color = if (isSel) GoldPrimary else streamingColor, radius = if (isSel) 5.dp.toPx() else 3.5.dp.toPx(), center = pt)
+                        drawCircle(color = Color.White, radius = 1.6.dp.toPx(), center = pt)
+                    }
+                }
+            }
+
+            // Season X-Axis labels
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                trendPoints.forEachIndexed { idx, pt ->
+                    val isSel = activeIdx == idx
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "${pt.seasonYear}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isSel) GoldPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (isSel) FontWeight.Black else FontWeight.SemiBold,
+                            fontSize = 10.sp
+                        )
+                        Text(
+                            text = "\$${String.format("%.1f", pt.totalBroadcastRevenueMillions)}M",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isSel) tvColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                            fontSize = 9.sp
+                        )
+                    }
+                }
+            }
+
+            // Interactive Broadcast Details Footer Tooltip
+            if (activePoint != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics(mergeDescendants = true) {}
+                        .testTag("broadcast_trends_tooltip")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Y${activePoint.seasonYear} • ${activePoint.franchiseName}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "TV \$${String.format("%.1f", activePoint.tvContractRevenueMillions)}M • Streaming \$${String.format("%.1f", activePoint.streamingContractRevenueMillions)}M",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "\$${String.format("%.1f", activePoint.totalBroadcastRevenueMillions)}M",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Black,
+                            color = GoldPrimary
+                        )
+                    }
                 }
             }
         }

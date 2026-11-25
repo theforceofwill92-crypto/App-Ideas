@@ -319,6 +319,38 @@ fun LaborUnionNegotiationsScreen(
 
                         Spacer(modifier = Modifier.height(10.dp))
 
+                        val avgTeamMorale = remember(uiState.franchises) {
+                            if (uiState.franchises.isNotEmpty()) uiState.franchises.map { it.teamMorale }.average().toInt() else 78
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("card_salary_structure_summary")
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text(
+                                    text = "LEAGUE SALARY STRUCTURE & CLUBHOUSE MORALE",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Black,
+                                    color = GoldPrimary
+                                )
+                                Text(
+                                    text = "Avg Team Morale: $avgTeamMorale% • Cap: \$${union.salaryCapMillions}M • Lux Tax: \$${union.luxuryTaxThresholdMillions}M",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Rookie Scale: ${union.rookieScaleMultiplierPct}% • Max Contract: ${union.maxContractCapPct}% • Min Floor: \$${union.minPlayerSalaryK}K",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
                         OutlinedButton(
                             onClick = { viewModel.openLaborNegotiationOverlay() },
                             shape = RoundedCornerShape(10.dp),
@@ -342,6 +374,31 @@ fun LaborUnionNegotiationsScreen(
                                 text = "Convene Union Table Ultimatum & Projections",
                                 fontWeight = FontWeight.Bold,
                                 color = if (projectedStrikeRisk > 30) CrimsonAlert else GoldPrimary
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        OutlinedButton(
+                            onClick = { viewModel.triggerRandomContractDispute() },
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.65f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .minimumInteractiveComponentSize()
+                                .testTag("btn_trigger_random_contract_dispute")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.WarningAmber,
+                                contentDescription = "Simulate Random Contract Dispute",
+                                tint = AmberWarning,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Simulate Contract Dispute Bargaining Event",
+                                fontWeight = FontWeight.Bold,
+                                color = AmberWarning
                             )
                         }
                     }

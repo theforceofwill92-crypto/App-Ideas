@@ -179,7 +179,7 @@ fun LaborUnionNegotiationOverlay(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("labor_overlay_baseline"),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             BaselinePill(
                                 label = "Cash",
@@ -188,13 +188,21 @@ fun LaborUnionNegotiationOverlay(
                                 modifier = Modifier.weight(1f)
                             )
                             BaselinePill(
-                                label = "Fan Sentiment",
+                                label = "Team Morale",
+                                value = "${session.currentTeamMoralePct}%",
+                                color = GoldPrimary,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("labor_overlay_team_morale_baseline")
+                            )
+                            BaselinePill(
+                                label = "Fans",
                                 value = "${session.currentFanSentimentPct}%",
                                 color = CyanAccent,
                                 modifier = Modifier.weight(1f)
                             )
                             BaselinePill(
-                                label = "Strike Risk",
+                                label = "Strike",
                                 value = "${session.currentStrikeRiskPct}%",
                                 color = if (session.currentStrikeRiskPct >= 40) CrimsonAlert else GoldPrimary,
                                 modifier = Modifier.weight(1f)
@@ -258,6 +266,7 @@ fun LaborUnionNegotiationOverlay(
                             index = index,
                             choice = choice,
                             baselineFanSentimentPct = session.currentFanSentimentPct,
+                            baselineTeamMoralePct = session.currentTeamMoralePct,
                             onSelect = { onSelectChoice(choice.id) }
                         )
                     }
@@ -354,6 +363,7 @@ private fun LaborNegotiationChoiceCard(
     index: Int,
     choice: LaborNegotiationChoice,
     baselineFanSentimentPct: Int,
+    baselineTeamMoralePct: Int = 78,
     onSelect: () -> Unit
 ) {
     val isHardline = choice.projectedStrikeRiskDelta > 0
@@ -520,11 +530,58 @@ private fun LaborNegotiationChoiceCard(
                 }
             }
 
-            // Projected Financial & Fan Sentiment Impacts
+            // Projected Financial, Team Morale & Salary Structure Impacts
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                if (choice.projectedTeamMoraleDelta != 0) {
+                    val tmSign = if (choice.projectedTeamMoraleDelta > 0) "+" else ""
+                    val tmAfter = (baselineTeamMoralePct + choice.projectedTeamMoraleDelta).coerceIn(10, 99)
+                    val tmColor = if (choice.projectedTeamMoraleDelta > 0) EmeraldAccent else CrimsonAlert
+                    ImpactProjectionChip(
+                        icon = Icons.Default.Groups,
+                        label = "Team Morale",
+                        value = "$tmSign${choice.projectedTeamMoraleDelta}% ($baselineTeamMoralePct% → $tmAfter%)",
+                        accent = tmColor,
+                        testTag = "labor_overlay_team_morale_$index"
+                    )
+                }
+
+                val structureParts = buildList {
+                    choice.requestedSalaryCapMillions?.let { add("Cap \$${it}M") }
+                    if (choice.requestedLuxuryTaxThresholdDelta != 0L) {
+                        val s = if (choice.requestedLuxuryTaxThresholdDelta > 0) "+" else ""
+                        add("Lux Tax $s\$${choice.requestedLuxuryTaxThresholdDelta}M")
+                    }
+                    if (choice.requestedRookieScaleDeltaPct != 0) {
+                        val s = if (choice.requestedRookieScaleDeltaPct > 0) "+" else ""
+                        add("Rookie Scale $s${choice.requestedRookieScaleDeltaPct}%")
+                    }
+                    if (choice.requestedMaxContractCapDeltaPct != 0) {
+                        val s = if (choice.requestedMaxContractCapDeltaPct > 0) "+" else ""
+                        add("Max Tier $s${choice.requestedMaxContractCapDeltaPct}%")
+                    }
+                    if (choice.requestedMinSalaryDeltaK != 0L) {
+                        val s = if (choice.requestedMinSalaryDeltaK > 0) "+" else ""
+                        add("Min $s\$${choice.requestedMinSalaryDeltaK}K")
+                    }
+                    if (choice.projectedRevenueShareDeltaPct != 0) {
+                        val s = if (choice.projectedRevenueShareDeltaPct > 0) "+" else ""
+                        add("Rev Split $s${choice.projectedRevenueShareDeltaPct}%")
+                    }
+                    choice.requestedSalaryCapType?.let { add(it.displayName) }
+                }
+                if (structureParts.isNotEmpty()) {
+                    ImpactProjectionChip(
+                        icon = Icons.Default.Tune,
+                        label = "Salary Structure",
+                        value = structureParts.joinToString(" • "),
+                        accent = GoldPrimary,
+                        testTag = "labor_overlay_salary_structure_$index"
+                    )
+                }
+
                 ImpactProjectionChip(
                     icon = Icons.Default.AccountBalanceWallet,
                     label = "Financial",

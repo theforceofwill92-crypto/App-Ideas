@@ -127,6 +127,20 @@ fun MainAppContent(viewModel: LeagueViewModel) {
                 onRejectMerger = { viewModel.resolveRivalAbsorptionNegotiation(acceptAbsorption = false) }
             )
         }
+
+        if (uiState.stadiumDealState.activeRelocationVote == null &&
+            uiState.stadiumDealState.activeBankruptcyScandal == null &&
+            uiState.stadiumDealState.activeNamingRightsOffer == null &&
+            uiState.rivalLeague.activeAbsorptionNegotiation == null
+        ) {
+            uiState.leagueSponsors.activeUltimatum?.let { ultimatum ->
+                SponsorUltimatumModal(
+                    ultimatum = ultimatum,
+                    onEnforceMaxPenalty = { viewModel.resolveSponsorUltimatum(enforceMaxPenalty = true) },
+                    onLetSponsorPullOut = { viewModel.resolveSponsorUltimatum(enforceMaxPenalty = false) }
+                )
+            }
+        }
     }
 }
 
@@ -145,6 +159,11 @@ private fun ActiveScreenContent(
 
     if (uiState.showSponsorshipNegotiationsScreen) {
         CorporateSponsorNegotiationsScreen(uiState = uiState, viewModel = viewModel)
+        return
+    }
+
+    if (uiState.showLeagueSponsorsScreen) {
+        LeagueSponsorsScreen(uiState = uiState, viewModel = viewModel)
         return
     }
 
@@ -205,6 +224,11 @@ private fun ActiveScreenContent(
 
     if (uiState.showOffSeasonScreen) {
         OffSeasonSummitScreen(uiState = uiState, viewModel = viewModel)
+        return
+    }
+
+    if (uiState.showDraftScoutingScreen) {
+        DraftScoutingScreen(uiState = uiState, viewModel = viewModel)
         return
     }
 

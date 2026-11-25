@@ -404,7 +404,35 @@ fun FranchisesScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val isManaged = uiState.managedFranchise?.id == franchise.id
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Team Morale: ${franchise.teamMorale}% • Payroll: \$${franchise.annualPayrollMillions}M",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (franchise.teamMorale >= 70) EmeraldAccent else AmberWarning,
+                            fontWeight = FontWeight.Bold
+                        )
+                        FilterChip(
+                            selected = isManaged,
+                            onClick = { viewModel.setManagedFranchise(franchise.id) },
+                            label = {
+                                Text(
+                                    text = if (isManaged) "MANAGED CLUB" else "Manage Club",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            modifier = Modifier.testTag("btn_manage_club_${franchise.id}")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     // Roster, Fan Loyalty & Morale Progress
                     ProgressBarWithLabel(

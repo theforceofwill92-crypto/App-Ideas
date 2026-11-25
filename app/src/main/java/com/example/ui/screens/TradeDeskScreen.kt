@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -240,8 +241,14 @@ fun TradeDeskScreen(
                 1 -> TradeMachineContent(
                     franchises = uiState.franchises,
                     tradeRules = tradeRules,
+                    unionAgreement = uiState.unionAgreement,
+                    capStrictness = uiState.ruleBook.salaryCapStrictness,
+                    managedFranchiseId = uiState.managedFranchiseId,
                     isTradeOpen = isTradeOpen,
                     prefilledSetup = prefill,
+                    onProposePending = { teamAId, teamBId, pA, picksA, pB, picksB ->
+                        viewModel.proposeTradeAsPending(teamAId, teamBId, pA, picksA, pB, picksB)
+                    },
                     onExecuteTrade = { teamAId, teamBId, pA, picksA, pB, picksB ->
                         viewModel.proposeAndExecuteTrade(teamAId, teamBId, pA, picksA, pB, picksB)
                     }
@@ -555,15 +562,21 @@ fun TradeProposalCard(
 fun TradeMachineContent(
     franchises: List<Franchise>,
     tradeRules: TradeRules,
+    unionAgreement: LaborUnionAgreement = LaborUnionAgreement(),
+    capStrictness: SalaryCapStrictness = SalaryCapStrictness.PROGRESSIVE_LUXURY_TAX,
+    managedFranchiseId: String? = null,
     isTradeOpen: Boolean,
     prefilledSetup: com.example.viewmodel.PrefilledTradeSetup? = null,
+    onProposePending: (String, String, List<RosterPlayer>, List<DraftPick>, List<RosterPlayer>, List<DraftPick>) -> Pair<Boolean, String> = { _, _, _, _, _, _ -> false to "" },
     onExecuteTrade: (String, String, List<RosterPlayer>, List<DraftPick>, List<RosterPlayer>, List<DraftPick>) -> Pair<Boolean, String>
 ) {
     if (franchises.size < 2) return
 
-    var teamAIndex by remember(prefilledSetup) {
+    var teamAIndex by remember(prefilledSetup, managedFranchiseId) {
         mutableStateOf(
-            prefilledSetup?.let { s -> franchises.indexOfFirst { it.id == s.teamAId }.takeIf { it >= 0 } } ?: 0
+            prefilledSetup?.let { s -> franchises.indexOfFirst { it.id == s.teamAId }.takeIf { it >= 0 } }
+                ?: managedFranchiseId?.let { id -> franchises.indexOfFirst { it.id == id }.takeIf { it >= 0 } }
+                ?: 0
         )
     }
     var teamBIndex by remember(prefilledSetup) {
@@ -600,6 +613,30 @@ fun TradeMachineContent(
     val valA = selectedPlayersA.sumOf { it.tradeValue } + selectedPicksA.sumOf { it.tradeValue }
     val valB = selectedPlayersB.sumOf { it.tradeValue } + selectedPicksB.sumOf { it.tradeValue }
     val fairness = TradeEngine.calculateFairnessScore(valA, valB)
+
+    val liveValidation = remember(
+        teamA,
+        teamB,
+        selectedPlayersA.size,
+        selectedPicksA.size,
+        selectedPlayersB.size,
+        selectedPicksB.size,
+        unionAgreement,
+        tradeRules,
+        capStrictness
+    ) {
+        TradeEngine.validateTradeLegality(
+            teamA = teamA,
+            teamB = teamB,
+            teamASendsPlayers = selectedPlayersA.toList(),
+            teamASendsPicks = selectedPicksA.toList(),
+            teamBSendsPlayers = selectedPlayersB.toList(),
+            teamBSendsPicks = selectedPicksB.toList(),
+            unionAgreement = unionAgreement,
+            tradeRules = tradeRules,
+            capStrictness = capStrictness
+        )
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -667,6 +704,90 @@ fun TradeMachineContent(
                         text = "Team A Value: $valA pts • Team B Value: $valB pts",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // Salary Cap Space & Trade Legality Card
+        item {
+            val hasSelection = (selectedPlayersA.isNotEmpty() || selectedPicksA.isNotEmpty()) &&
+                (selectedPlayersB.isNotEmpty() || selectedPicksB.isNotEmpty())
+            val capOk = liveValidation.isCapSpaceCompliant && (!hasSelection || liveValidation.isLegal)
+            val borderColor = if (capOk) EmeraldAccent else CrimsonAlert
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("card_trade_cap_legality"),
+                colors = CardDefaults.cardColors(containerColor = borderColor.copy(alpha = 0.08f)),
+                border = BorderStroke(1.dp, borderColor.copy(alpha = 0.45f)),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "SALARY CAP SPACE VALIDATION",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black,
+                            color = borderColor
+                        )
+                        Text(
+                            text = "Cap \$${unionAgreement.salaryCapMillions}M (${unionAgreement.salaryCapType.displayName})",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = GoldPrimary
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = teamA.nickname + if (teamA.id == managedFranchiseId) " (Managed)" else "",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Payroll \$${liveValidation.teamAImpact.preTradePayrollMillions}M -> \$${liveValidation.teamAImpact.postTradePayrollMillions}M",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Text(
+                                text = "Cap Space: ${if (liveValidation.teamAImpact.capSpaceAfterMillions >= 0) "\$${liveValidation.teamAImpact.capSpaceAfterMillions}M" else "-\$${kotlin.math.abs(liveValidation.teamAImpact.capSpaceAfterMillions)}M (Over)"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (liveValidation.teamAImpact.isCapSpaceLegal) EmeraldAccent else CrimsonAlert
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = teamB.nickname + if (teamB.id == managedFranchiseId) " (Managed)" else "",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Payroll \$${liveValidation.teamBImpact.preTradePayrollMillions}M -> \$${liveValidation.teamBImpact.postTradePayrollMillions}M",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Text(
+                                text = "Cap Space: ${if (liveValidation.teamBImpact.capSpaceAfterMillions >= 0) "\$${liveValidation.teamBImpact.capSpaceAfterMillions}M" else "-\$${kotlin.math.abs(liveValidation.teamBImpact.capSpaceAfterMillions)}M (Over)"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (liveValidation.teamBImpact.isCapSpaceLegal) EmeraldAccent else CrimsonAlert
+                            )
+                        }
+                    }
+                    Text(
+                        text = if (hasSelection) liveValidation.summaryMessage else "Select players or draft picks from both clubs to verify cap space legality.",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (capOk) MaterialTheme.colorScheme.onSurface else CrimsonAlert,
+                        modifier = Modifier.testTag("txt_trade_legality_summary")
                     )
                 }
             }
@@ -947,41 +1068,76 @@ fun TradeMachineContent(
             }
         }
 
-        // Execute Custom Trade Button
+        // Execute Custom Trade Buttons
         item {
-            Button(
-                onClick = {
-                    val result = onExecuteTrade(
-                        teamA.id,
-                        teamB.id,
-                        selectedPlayersA.toList(),
-                        selectedPicksA.toList(),
-                        selectedPlayersB.toList(),
-                        selectedPicksB.toList()
+            val hasBothAssets = (selectedPlayersA.isNotEmpty() || selectedPicksA.isNotEmpty()) &&
+                (selectedPlayersB.isNotEmpty() || selectedPicksB.isNotEmpty())
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        val result = onExecuteTrade(
+                            teamA.id,
+                            teamB.id,
+                            selectedPlayersA.toList(),
+                            selectedPicksA.toList(),
+                            selectedPlayersB.toList(),
+                            selectedPicksB.toList()
+                        )
+                        executionFeedback = result
+                        if (result.first) {
+                            selectedPlayersA.clear()
+                            selectedPicksA.clear()
+                            selectedPlayersB.clear()
+                            selectedPicksB.clear()
+                        }
+                    },
+                    enabled = isTradeOpen && hasBothAssets,
+                    colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("btn_execute_custom_trade")
+                        .minimumInteractiveComponentSize(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Handshake, contentDescription = null, tint = Color.Black)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isTradeOpen) "Propose & Ratify Trade" else "Trade Deadline Passed",
+                        color = Color.Black,
+                        fontWeight = FontWeight.Black
                     )
-                    executionFeedback = result
-                    if (result.first) {
-                        selectedPlayersA.clear()
-                        selectedPicksA.clear()
-                        selectedPlayersB.clear()
-                        selectedPicksB.clear()
-                    }
-                },
-                enabled = isTradeOpen && (selectedPlayersA.isNotEmpty() || selectedPicksA.isNotEmpty()) && (selectedPlayersB.isNotEmpty() || selectedPicksB.isNotEmpty()),
-                colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("btn_execute_custom_trade")
-                    .minimumInteractiveComponentSize(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.Handshake, contentDescription = null, tint = Color.Black)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = if (isTradeOpen) "Propose & Ratify Trade" else "Trade Deadline Passed",
-                    color = Color.Black,
-                    fontWeight = FontWeight.Black
-                )
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        val result = onProposePending(
+                            teamA.id,
+                            teamB.id,
+                            selectedPlayersA.toList(),
+                            selectedPicksA.toList(),
+                            selectedPlayersB.toList(),
+                            selectedPicksB.toList()
+                        )
+                        executionFeedback = result
+                        if (result.first) {
+                            selectedPlayersA.clear()
+                            selectedPicksA.clear()
+                            selectedPlayersB.clear()
+                            selectedPicksB.clear()
+                        }
+                    },
+                    enabled = isTradeOpen && hasBothAssets,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("btn_propose_pending_trade")
+                        .minimumInteractiveComponentSize(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = "Send Validated Proposal to Pending Queue",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

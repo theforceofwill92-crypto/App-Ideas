@@ -131,6 +131,165 @@ object TradeEngine {
         return (maxDiff.toDouble() <= minDiff.toDouble() * multiplier + 5.0)
     }
 
+    fun calculateLivePayrollMillions(franchise: Franchise): Long {
+        val rosterSum = franchise.roster.sumOf { it.salaryMillions }
+        return if (rosterSum > 0L) rosterSum else franchise.annualPayrollMillions
+    }
+
+    fun validateTradeLegality(
+        teamA: Franchise,
+        teamB: Franchise,
+        teamASendsPlayers: List<RosterPlayer>,
+        teamASendsPicks: List<DraftPick>,
+        teamBSendsPlayers: List<RosterPlayer>,
+        teamBSendsPicks: List<DraftPick>,
+        unionAgreement: LaborUnionAgreement,
+        tradeRules: TradeRules,
+        capStrictness: SalaryCapStrictness = SalaryCapStrictness.PROGRESSIVE_LUXURY_TAX
+    ): TradeLegalityValidation {
+        val violations = mutableListOf<String>()
+        if (teamA.id == teamB.id) {
+            violations.add("Cannot trade with the same franchise.")
+        }
+        if (teamASendsPlayers.isEmpty() && teamASendsPicks.isEmpty()) {
+            violations.add("${teamA.teamFullName} must include at least one player or draft pick.")
+        }
+        if (teamBSendsPlayers.isEmpty() && teamBSendsPicks.isEmpty()) {
+            violations.add("${teamB.teamFullName} must include at least one player or draft pick.")
+        }
+        if (!tradeRules.allowDraftPickTrading && (teamASendsPicks.isNotEmpty() || teamBSendsPicks.isNotEmpty())) {
+            violations.add("League trade rules currently prohibit trading future draft picks.")
+        }
+
+        val salaryOutA = teamASendsPlayers.sumOf { it.salaryMillions }
+        val salaryInA = teamBSendsPlayers.sumOf { it.salaryMillions }
+        val salaryOutB = salaryInA
+        val salaryInB = salaryOutA
+
+        val cap = unionAgreement.salaryCapMillions
+        val isFreeMarket = capStrictness == SalaryCapStrictness.UNRESTRICTED_MARKET ||
+            unionAgreement.salaryCapType == SalaryCapType.FREE_MARKET
+        val isHardCap = capStrictness == SalaryCapStrictness.STRICT_HARD_CAP ||
+            unionAgreement.salaryCapType == SalaryCapType.HARD_CAP
+
+        fun evaluateTeamCap(
+            team: Franchise,
+            outgoing: Long,
+            incoming: Long
+        ): TeamCapSpaceImpact {
+            val prePayroll = calculateLivePayrollMillions(team)
+            val postPayroll = (prePayroll - outgoing + incoming).coerceAtLeast(0L)
+            val capBefore = cap - prePayroll
+            val capAfter = cap - postPayroll
+            val netAdded = incoming - outgoing
+
+            if (isFreeMarket) {
+                return TeamCapSpaceImpact(
+                    franchiseId = team.id,
+                    franchiseName = team.teamFullName,
+                    salaryCapMillions = cap,
+                    preTradePayrollMillions = prePayroll,
+                    outgoingSalaryMillions = outgoing,
+                    incomingSalaryMillions = incoming,
+                    postTradePayrollMillions = postPayroll,
+                    capSpaceBeforeMillions = capBefore,
+                    capSpaceAfterMillions = capAfter,
+                    isCapSpaceLegal = true,
+                    violationReason = null
+                )
+            }
+
+            if (isHardCap) {
+                val legal = postPayroll <= cap || netAdded <= 0L
+                val reason = if (!legal) {
+                    val overage = (postPayroll - cap).coerceAtLeast(netAdded)
+                    "${team.teamFullName} lacks salary cap space under \$${cap}M Hard Cap: available space is \$${capBefore.coerceAtLeast(0L)}M, post-trade payroll \$${postPayroll}M (\$${overage}M over cap)."
+                } else null
+                return TeamCapSpaceImpact(
+                    franchiseId = team.id,
+                    franchiseName = team.teamFullName,
+                    salaryCapMillions = cap,
+                    preTradePayrollMillions = prePayroll,
+                    outgoingSalaryMillions = outgoing,
+                    incomingSalaryMillions = incoming,
+                    postTradePayrollMillions = postPayroll,
+                    capSpaceBeforeMillions = capBefore,
+                    capSpaceAfterMillions = capAfter,
+                    isCapSpaceLegal = legal,
+                    violationReason = reason
+                )
+            }
+
+            // Soft Cap + Luxury Tax validation:
+            // 1. If post-trade payroll stays at or under the Salary Cap, team uses cap space cleanly -> LEGAL.
+            // 2. If post-trade payroll exceeds the Salary Cap, incoming salary must fit within
+            //    available pre-trade cap space + salary matching allowance AND stay below Luxury Tax Apron.
+            val taxApronBuffer = if (capStrictness == SalaryCapStrictness.PROGRESSIVE_LUXURY_TAX) 55L else 70L
+            val hardApronCeiling = maxOf(unionAgreement.luxuryTaxThresholdMillions, cap + 16L) + taxApronBuffer
+            val capSpaceRoom = capBefore.coerceAtLeast(0L)
+            val matchingLimit = ((outgoing * tradeRules.salaryMatchingStrictnessPct.toDouble() / 100.0) + 5.0).toLong()
+            val maxLegalIncoming = capSpaceRoom + matchingLimit
+
+            val (legal, reason) = when {
+                postPayroll <= cap -> true to null
+                netAdded <= 0L -> true to null
+                postPayroll > hardApronCeiling -> false to
+                    "${team.teamFullName} breaches Luxury Tax Apron (\$${postPayroll}M > \$${hardApronCeiling}M ceiling; Cap Space: \$${capBefore.coerceAtLeast(0L)}M)."
+                incoming > maxLegalIncoming -> false to
+                    "${team.teamFullName} lacks cap space (\$${capSpaceRoom}M free) for \$${incoming}M incoming vs \$${outgoing}M outgoing (Max allowed: \$${maxLegalIncoming}M)."
+                else -> true to null
+            }
+
+            return TeamCapSpaceImpact(
+                franchiseId = team.id,
+                franchiseName = team.teamFullName,
+                salaryCapMillions = cap,
+                preTradePayrollMillions = prePayroll,
+                outgoingSalaryMillions = outgoing,
+                incomingSalaryMillions = incoming,
+                postTradePayrollMillions = postPayroll,
+                capSpaceBeforeMillions = capBefore,
+                capSpaceAfterMillions = capAfter,
+                isCapSpaceLegal = legal,
+                violationReason = reason
+            )
+        }
+
+        val impactA = evaluateTeamCap(teamA, salaryOutA, salaryInA)
+        val impactB = evaluateTeamCap(teamB, salaryOutB, salaryInB)
+
+        impactA.violationReason?.let { violations.add(it) }
+        impactB.violationReason?.let { violations.add(it) }
+
+        val capSpaceOk = impactA.isCapSpaceLegal && impactB.isCapSpaceLegal
+        val fitsPureCapSpace = impactA.postTradePayrollMillions <= cap && impactB.postTradePayrollMillions <= cap
+        val salaryMatchingOk = isFreeMarket || fitsPureCapSpace || capSpaceOk ||
+            isSalaryCapCompliant(salaryOutA, salaryInA, tradeRules.salaryMatchingStrictnessPct)
+
+        val assetOk = teamA.id != teamB.id &&
+            (teamASendsPlayers.isNotEmpty() || teamASendsPicks.isNotEmpty()) &&
+            (teamBSendsPlayers.isNotEmpty() || teamBSendsPicks.isNotEmpty()) &&
+            (tradeRules.allowDraftPickTrading || (teamASendsPicks.isEmpty() && teamBSendsPicks.isEmpty()))
+
+        val isLegal = violations.isEmpty() && capSpaceOk && assetOk
+        val summary = if (isLegal) {
+            "Cap-Legal Trade: ${teamA.nickname} post-trade payroll \$${impactA.postTradePayrollMillions}M • ${teamB.nickname} post-trade payroll \$${impactB.postTradePayrollMillions}M (Cap \$${cap}M)."
+        } else {
+            violations.firstOrNull() ?: "Trade fails league salary cap space legality."
+        }
+
+        return TradeLegalityValidation(
+            isLegal = isLegal,
+            isSalaryMatchingCompliant = salaryMatchingOk,
+            isCapSpaceCompliant = capSpaceOk,
+            isAssetRuleCompliant = assetOk,
+            teamAImpact = impactA,
+            teamBImpact = impactB,
+            violations = violations,
+            summaryMessage = summary
+        )
+    }
+
     fun generateRealisticTradeOffer(
         week: Int,
         franchises: List<Franchise>,
@@ -640,3 +799,29 @@ data class TradeBlockMatch(
     val matchScore: Int,
     val fitHeadline: String
 )
+
+data class TeamCapSpaceImpact(
+    val franchiseId: String,
+    val franchiseName: String,
+    val salaryCapMillions: Long,
+    val preTradePayrollMillions: Long,
+    val outgoingSalaryMillions: Long,
+    val incomingSalaryMillions: Long,
+    val postTradePayrollMillions: Long,
+    val capSpaceBeforeMillions: Long,
+    val capSpaceAfterMillions: Long,
+    val isCapSpaceLegal: Boolean,
+    val violationReason: String? = null
+)
+
+data class TradeLegalityValidation(
+    val isLegal: Boolean,
+    val isSalaryMatchingCompliant: Boolean,
+    val isCapSpaceCompliant: Boolean,
+    val isAssetRuleCompliant: Boolean,
+    val teamAImpact: TeamCapSpaceImpact,
+    val teamBImpact: TeamCapSpaceImpact,
+    val violations: List<String>,
+    val summaryMessage: String
+)
+

@@ -312,10 +312,12 @@ fun OffSeasonSummitScreen(
                         LeagueDraftPanel(
                             session = session,
                             franchises = uiState.franchises,
+                            managedFranchiseId = uiState.managedFranchiseId,
                             sportType = uiState.sportType,
                             isReviewMode = isReviewMode,
                             onSelectProspect = { prospectId -> viewModel.conductNextRookieDraftPick(prospectId) },
                             onAutoPickNext = { viewModel.conductNextRookieDraftPick(null) },
+                            onSimCpuToManaged = { viewModel.autoPickCpuUntilManagedTurn() },
                             onAutoCompleteDraft = { viewModel.autoCompleteRookieDraft() },
                             onRestartDraft = { viewModel.restartRookieDraft() },
                             onProceedToSchedule = { viewModel.setOffSeasonStep(OffSeasonStep.SCHEDULE_CALENDAR) },
@@ -1104,10 +1106,12 @@ private fun DraftLotteryPanel(
 private fun LeagueDraftPanel(
     session: OffSeasonSession,
     franchises: List<Franchise>,
+    managedFranchiseId: String?,
     sportType: SportType,
     isReviewMode: Boolean,
     onSelectProspect: (String) -> Unit,
     onAutoPickNext: () -> Unit,
+    onSimCpuToManaged: () -> Unit,
     onAutoCompleteDraft: () -> Unit,
     onRestartDraft: () -> Unit,
     onProceedToSchedule: () -> Unit,
@@ -1274,11 +1278,22 @@ private fun LeagueDraftPanel(
                                     )
                                 }
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = onTheClockTeam.teamFullName,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Black
-                                )
+                                val isManagedTurn = onTheClockTeam.id == managedFranchiseId
+                                Column {
+                                    Text(
+                                        text = onTheClockTeam.teamFullName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Black
+                                    )
+                                    if (isManagedTurn) {
+                                        Text(
+                                            text = "YOUR MANAGED FRANCHISE PICK!",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Black,
+                                            color = EmeraldAccent
+                                        )
+                                    }
+                                }
                             }
                             Text(
                                 text = "${onTheClockTeam.rosterRating} OVR",
@@ -1375,6 +1390,19 @@ private fun LeagueDraftPanel(
                                     .testTag("btn_draft_sim_all")
                             ) {
                                 Text("Sim Entire Draft", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                        if (managedFranchiseId != null && onTheClockTeam.id != managedFranchiseId) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            OutlinedButton(
+                                onClick = onSimCpuToManaged,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("btn_draft_sim_to_managed")
+                            ) {
+                                Text("Sim CPU Picks to Managed Turn", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
                         }
                     }
@@ -1556,18 +1584,18 @@ private fun LeagueDraftPanel(
                                         Surface(
                                             color = RoyalBlueAccent.copy(alpha = 0.12f),
                                             shape = RoundedCornerShape(6.dp),
-                                            modifier = Modifier.weight(0.85f)
+                                            modifier = Modifier.weight(0.95f)
                                         ) {
                                             Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)) {
                                                 Text(
-                                                    text = "PROJ OVR",
+                                                    text = "OVR / POT",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     fontSize = 9.sp,
                                                     color = RoyalBlueAccent,
                                                     fontWeight = FontWeight.Black
                                                 )
                                                 Text(
-                                                    text = "${prospect.scoutingReport.projectedOverall} (Fit $fitScore)",
+                                                    text = "${prospect.overallRating} / ${prospect.potentialRating} POT",
                                                     style = MaterialTheme.typography.labelMedium,
                                                     fontWeight = FontWeight.Black
                                                 )

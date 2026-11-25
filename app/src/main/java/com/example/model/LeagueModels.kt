@@ -653,7 +653,8 @@ data class RosterPlayer(
     val activeInjury: PlayerInjury? = null,
     val isAssignedToMinorLeague: Boolean = false,
     val minorLeagueOvrProgress: Int = 0,
-    val suspendedGamesRemaining: Int = 0
+    val suspendedGamesRemaining: Int = 0,
+    val potentialRating: Int = (overallRating + 6).coerceIn(overallRating, 99)
 ) {
     val isInjured: Boolean
         get() = activeInjury != null && activeInjury.weeksRemaining > 0
@@ -894,7 +895,8 @@ data class Franchise(
     val relocationCount: Int = 0,
     val lowSpendingSeasons: Int = 0,
     val reputationScore: Int = 78,
-    val lastReputationNote: String = "Balanced ownership investment and market stability."
+    val lastReputationNote: String = "Balanced ownership investment and market stability.",
+    val teamMorale: Int = 78
 ) {
     val winPct: Double
         get() = if (wins + losses == 0) 0.500 else wins.toDouble() / (wins + losses)
@@ -1008,7 +1010,10 @@ data class LaborUnionAgreement(
     val isLockoutActive: Boolean = false,
     val lockoutWeeksLost: Int = 0,
     val lastLockoutSeasonYear: Int = 0,
-    val negotiatedRosterRule: RosterSizeRule = RosterSizeRule.STANDARD_15
+    val negotiatedRosterRule: RosterSizeRule = RosterSizeRule.STANDARD_15,
+    val luxuryTaxThresholdMillions: Long = 102L,
+    val rookieScaleMultiplierPct: Int = 100,
+    val maxContractCapPct: Int = 30
 )
 
 enum class PolicyStrictness(val title: String, val integrityModifier: Int, val playerMoraleModifier: Int) {
@@ -2717,8 +2722,16 @@ data class RookieProspect(
     val scoutingReport: ScoutingReport,
     val isDrafted: Boolean = false,
     val draftedByFranchiseId: String? = null,
-    val draftedPickNumber: Int? = null
+    val draftedPickNumber: Int? = null,
+    val overallRating: Int = scoutingReport.projectedOverall,
+    val potentialRating: Int = 88
 ) {
+    val upsidePoints: Int
+        get() = (potentialRating - overallRating).coerceAtLeast(0)
+
+    val potentialLabel: String
+        get() = "$potentialRating (${scoutingReport.potentialGrade})"
+
     fun evaluateTeamFitScore(teamNeeds: List<String>, draftSlot: Int): Double {
         val scoutingWeight = (scoutingReport.scoutGrade * 0.50) + (scoutingReport.combineAthleticScore * 0.12)
         val collegiateWeight = collegiateMetrics.collegiateMetricScore * 0.38
@@ -2880,179 +2893,14 @@ object OffSeasonEngine {
     fun generateDraftProspectPool(
         year: Int,
         poolSize: Int,
-        sportType: SportType
-    ): List<RookieProspect> {
-        val positions = sportType.starterPositions
-        val archetypes = sportType.archetypes
-        val proComps = listOf(
-            "Prime All-League Dual-Threat Lead",
-            "Switchable Two-Way All-Star Wing",
-            "High-Motor Championship Anchor",
-            "Modern Stretch Floor Commander",
-            "High-Efficiency Three-Level Scorer",
-            "Defensive Cornerstone & Transition Catalyst"
-        )
-
-        val (pLabel, sLabel, tLabel) = when (sportType) {
-            SportType.BASKETBALL -> Triple("PPG", "RPG", "APG")
-            SportType.FOOTBALL -> Triple("YPG", "TD/G", "QBR/TKL")
-            SportType.SOCCER -> Triple("G/30", "SOT/G", "KP/90")
-            SportType.HOCKEY -> Triple("PTS/G", "SOG/G", "+/-")
-        }
-
-        val usedNames = mutableSetOf<String>()
-        val prospects = mutableListOf<RookieProspect>()
-        for (idx in 0 until poolSize) {
-            var offset = 0
-            var fullName: String
-            do {
-                val fName = firstNames[(idx * 5 + year * 3 + 1 + offset) % firstNames.size]
-                val lName = lastNames[(idx * 7 + year * 2 + 3 + offset * 2) % lastNames.size]
-                fullName = "$fName $lName"
-                offset++
-            } while (!usedNames.add(fullName) && offset < 25)
-
-            val tierDecay = idx
-            val (projOvr, potentialGrade, scoutBase) = when (tierDecay) {
-                0 -> Triple(85, "A+", 96)
-                1 -> Triple(83, "A+", 94)
-                2 -> Triple(81, "A", 91)
-                3 -> Triple(80, "A", 89)
-                4 -> Triple(79, "A-", 87)
-                5 -> Triple(78, "A-", 85)
-                6, 7 -> Triple(77, "B+", 82 - (tierDecay - 6))
-                else -> Triple((76 - ((tierDecay - 8) / 3)).coerceAtLeast(73), if (tierDecay < 10) "B+" else "B", (80 - (tierDecay - 8) * 2).coerceAtLeast(72))
-            }
-
-            val pos = positions[(idx + (year % positions.size)) % positions.size]
-            val archetype = archetypes[idx % archetypes.size]
-            val (school, conf) = collegesAndClubs[(idx + year) % collegesAndClubs.size]
-            val cYear = classYears[(idx + year) % classYears.size]
-            val age = when (cYear) {
-                "Freshman" -> 19
-                "Sophomore", "Int'l Pro" -> 20
-                "Junior" -> 21
-                else -> 22
-            }
-
-            // Collegiate metric variance: create realistic separation between high-ceiling raw scouts & hyper-productive collegians
-            val prodVariance = ((idx * 3 + year) % 5) - 2 // -2..+2
-            val collegeScore = (scoutBase - 1 + prodVariance).coerceIn(71, 98)
-            val combineScore = (scoutBase + (((idx + 2) % 5) - 2)).coerceIn(74, 99)
-            val defGrade = (scoutBase - 3 + ((idx * 2) % 6)).coerceIn(70, 96)
-            val iqGrade = (scoutBase - 1 + ((idx + 1) % 5)).coerceIn(72, 97)
-
-            val games = when (sportType) {
-                SportType.BASKETBALL -> 32 + (idx % 6)
-                SportType.FOOTBALL -> 12 + (idx % 3)
-                SportType.SOCCER -> 28 + (idx % 8)
-                SportType.HOCKEY -> 34 + (idx % 6)
-            }
-
-            val (pVal, sVal, tVal, eff) = when (sportType) {
-                SportType.BASKETBALL -> {
-                    val basePpg = 14.5 + ((collegeScore - 72) * 0.42) + (if (pos in listOf("PG", "SG", "SF")) 1.8 else -0.6)
-                    val baseRpg = if (pos in listOf("PF", "C")) 8.4 + (collegeScore - 75) * 0.14 else 4.2 + (collegeScore - 75) * 0.08
-                    val baseApg = if (pos == "PG") 6.2 + (collegeScore - 75) * 0.12 else 2.5 + (collegeScore - 75) * 0.06
-                    val effVal = 51.5 + (collegeScore - 72) * 0.45
-                    listOf(
-                        Math.round(basePpg * 10.0) / 10.0,
-                        Math.round(baseRpg * 10.0) / 10.0,
-                        Math.round(baseApg * 10.0) / 10.0,
-                        Math.round(effVal * 10.0) / 10.0
-                    )
-                }
-                SportType.FOOTBALL -> {
-                    val baseYpg = if (pos == "QB") 265.0 + (collegeScore - 72) * 4.2 else 82.0 + (collegeScore - 72) * 2.1
-                    val baseTd = if (pos == "QB") 2.6 + (collegeScore - 75) * 0.06 else 0.9 + (collegeScore - 75) * 0.04
-                    val baseTkl = if (pos in listOf("EDGE", "CB")) 5.8 + (collegeScore - 75) * 0.12 else 88.0 + (collegeScore - 75) * 0.5
-                    val effVal = 58.0 + (collegeScore - 72) * 0.55
-                    listOf(
-                        Math.round(baseYpg * 10.0) / 10.0,
-                        Math.round(baseTd * 10.0) / 10.0,
-                        Math.round(baseTkl * 10.0) / 10.0,
-                        Math.round(effVal * 10.0) / 10.0
-                    )
-                }
-                SportType.SOCCER -> {
-                    val baseGa = 14.0 + (collegeScore - 72) * 0.75
-                    val baseSot = 2.1 + (collegeScore - 72) * 0.08
-                    val baseKp = 1.8 + (collegeScore - 72) * 0.09
-                    val effVal = 54.0 + (collegeScore - 72) * 0.6
-                    listOf(
-                        Math.round(baseGa * 10.0) / 10.0,
-                        Math.round(baseSot * 10.0) / 10.0,
-                        Math.round(baseKp * 10.0) / 10.0,
-                        Math.round(effVal * 10.0) / 10.0
-                    )
-                }
-                SportType.HOCKEY -> {
-                    val basePts = 0.95 + (collegeScore - 72) * 0.04
-                    val baseSog = 3.1 + (collegeScore - 72) * 0.09
-                    val basePm = 10.0 + (collegeScore - 72) * 0.8
-                    val effVal = 55.0 + (collegeScore - 72) * 0.5
-                    listOf(
-                        Math.round(basePts * 10.0) / 10.0,
-                        Math.round(baseSog * 10.0) / 10.0,
-                        Math.round(basePm * 10.0) / 10.0,
-                        Math.round(effVal * 10.0) / 10.0
-                    )
-                }
-            }
-
-            val s1 = strengthTags[idx % strengthTags.size]
-            val s2 = strengthTags[(idx + 3) % strengthTags.size]
-            val s3 = strengthTags[(idx + 6) % strengthTags.size]
-            val risk = riskNotes[idx % riskNotes.size]
-            val comp = proComps[idx % proComps.size]
-            val accolade = accoladesList[idx % accoladesList.size]
-
-            val colMetrics = CollegiateMetrics(
-                schoolName = school,
-                conferenceName = conf,
-                classYear = cYear,
-                gamesPlayed = games,
-                primaryStatLabel = pLabel,
-                primaryStatValue = pVal,
-                secondaryStatLabel = sLabel,
-                secondaryStatValue = sVal,
-                tertiaryStatLabel = tLabel,
-                tertiaryStatValue = tVal,
-                efficiencyPct = eff,
-                collegiateMetricScore = collegeScore,
-                accolades = accolade
-            )
-
-            val execSummary = "$cYear $pos out of $school ($conf). Graded $scoutBase by league scouts with $collegeScore collegiate metric score (${colMetrics.formattedStatLine})."
-
-            val report = ScoutingReport(
-                scoutGrade = scoutBase,
-                potentialGrade = potentialGrade,
-                projectedOverall = projOvr,
-                combineAthleticScore = combineScore,
-                defensiveGrade = defGrade,
-                iqAndIntangibles = iqGrade,
-                strengths = listOf(s1, s2, s3),
-                weaknessNote = risk,
-                proComparison = comp,
-                executiveSummary = execSummary
-            )
-
-            prospects.add(
-                RookieProspect(
-                    id = "prospect_${year}_${idx + 1}",
-                    name = fullName,
-                    age = age,
-                    position = pos,
-                    archetype = archetype,
-                    consensusRank = idx + 1,
-                    collegiateMetrics = colMetrics,
-                    scoutingReport = report
-                )
-            )
-        }
-        return prospects
-    }
+        sportType: SportType,
+        seed: Long? = null
+    ): List<RookieProspect> = DraftClassGenerator.generateProceduralClass(
+        year = year,
+        poolSize = poolSize,
+        sportType = sportType,
+        seed = seed
+    )
 
     fun getTeamDraftNeeds(
         team: Franchise,
@@ -3099,7 +2947,8 @@ object OffSeasonEngine {
         session: OffSeasonSession,
         franchises: List<Franchise>,
         sportType: SportType,
-        chosenProspectId: String? = null
+        chosenProspectId: String? = null,
+        rookieScaleMultiplierPct: Int = 100
     ): OffSeasonSession {
         if (session.isDraftCompleted || session.currentDraftPickIndex >= session.draftOrderFranchiseIds.size) {
             return session.copy(isDraftCompleted = true)
@@ -3131,7 +2980,7 @@ object OffSeasonEngine {
                 val fitScore = manual.evaluateTeamFitScore(teamNeeds, pickNumber)
                 val metNeed = manual.position in teamNeeds
                 val prefix = if (metNeed) "Commissioner/Team fills ${manual.position} need" else "High-upside selection"
-                manual to "$prefix • Scout Grade ${manual.scoutingReport.scoutGrade}, College Score ${manual.collegiateMetrics.collegiateMetricScore} (${manual.collegiateMetrics.formattedStatLine}) [Fit $fitScore]"
+                manual to "$prefix • ${manual.overallRating} OVR / ${manual.potentialRating} POT, Scout ${manual.scoutingReport.scoutGrade} (${manual.collegiateMetrics.formattedStatLine}) [Fit $fitScore]"
             } else {
                 evaluateBestProspectForTeam(team, available, session.retirements, session.freeAgencySignings, sportType, pickNumber)
             }
@@ -3144,7 +2993,7 @@ object OffSeasonEngine {
         val rationale = "${selectedPair.second}$tradeNote"
         val metNeed = chosen.position in teamNeeds
 
-        val rookieSalary = if (round >= 2) {
+        val baseRookieSalary = if (round >= 2) {
             2L
         } else {
             when (pickNumber) {
@@ -3154,13 +3003,16 @@ object OffSeasonEngine {
                 else -> 4L
             }
         }
+        val rookieSalary = kotlin.math.round(baseRookieSalary * (rookieScaleMultiplierPct.coerceIn(75, 150) / 100.0))
+            .toLong()
+            .coerceAtLeast(1L)
         val teamBoost = if (round >= 2) {
-            if (chosen.scoutingReport.projectedOverall >= 78) 2 else 1
+            if (chosen.overallRating >= 78) 2 else 1
         } else {
             when {
-                pickNumber == 1 && chosen.scoutingReport.projectedOverall >= 84 -> 6
-                pickNumber <= 3 && chosen.scoutingReport.projectedOverall >= 81 -> 5
-                chosen.scoutingReport.projectedOverall >= 79 -> 4
+                pickNumber == 1 && chosen.overallRating >= 84 -> 6
+                pickNumber <= 3 && chosen.overallRating >= 81 -> 5
+                chosen.overallRating >= 79 -> 4
                 else -> 3
             }
         }
@@ -3170,11 +3022,12 @@ object OffSeasonEngine {
             name = chosen.name,
             franchiseId = team.id,
             position = chosen.position,
-            overallRating = chosen.scoutingReport.projectedOverall,
+            overallRating = chosen.overallRating,
             age = chosen.age,
             salaryMillions = rookieSalary,
             contractYearsRemaining = if (round >= 2) 3 else 4,
-            archetype = chosen.archetype
+            archetype = chosen.archetype,
+            potentialRating = chosen.potentialRating
         )
 
         val newRecord = DraftPickRecord(
@@ -3186,7 +3039,7 @@ object OffSeasonEngine {
             position = chosen.position,
             archetype = chosen.archetype,
             origin = chosen.collegiateMetrics.schoolName,
-            overallRating = chosen.scoutingReport.projectedOverall,
+            overallRating = chosen.overallRating,
             potentialGrade = chosen.scoutingReport.potentialGrade,
             teamBoost = teamBoost,
             prospectId = chosen.id,
@@ -3228,12 +3081,19 @@ object OffSeasonEngine {
     fun autoCompleteDraft(
         session: OffSeasonSession,
         franchises: List<Franchise>,
-        sportType: SportType
+        sportType: SportType,
+        rookieScaleMultiplierPct: Int = 100
     ): OffSeasonSession {
         var current = session
         var guard = 0
         while (!current.isDraftCompleted && current.currentDraftPickIndex < current.draftOrderFranchiseIds.size && guard < 40) {
-            current = conductSingleDraftPick(current, franchises, sportType, null)
+            current = conductSingleDraftPick(
+                session = current,
+                franchises = franchises,
+                sportType = sportType,
+                chosenProspectId = null,
+                rookieScaleMultiplierPct = rookieScaleMultiplierPct
+            )
             guard++
         }
         return current

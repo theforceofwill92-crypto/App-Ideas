@@ -224,7 +224,25 @@ object StadiumDealEngine {
         "Liberty Oak Hardware" to "Blue-collar hometown building supplier",
         "Metro Transit Authority" to "Municipal rail & mobility backbone",
         "Summit Valley Roasters" to "Regional heritage coffee & hospitality",
-        "HarborLight Health" to "Local hospital network & community clinic"
+        "HarborLight Health" to "Local hospital network & community clinic",
+        "PrairieStone Insurance" to "Midwest family property & casualty carrier",
+        "Cascadia Timber Co." to "Sustainable forestry & civic construction",
+        "Redwood Regional Bank" to "Main Street commercial & savings institution",
+        "Bayside Energy Coop" to "Publicly accountable municipal electric utility",
+        "IronBridge Steelworks" to "American structural manufacturing leader",
+        "Lakeside Fresh Grocers" to "Community neighborhood supermarket chain",
+        "ClearView Optical" to "Regional family vision & wellness centers",
+        "Beacon Civic Broadband" to "Municipal fiber & public connectivity group",
+        "Greenfield Foods" to "Farm-to-table packaged staples & dairy",
+        "Heritage Rail Lines" to "Regional passenger & freight corridor",
+        "Riverbend Bottling Co." to "Hometown sparkling water & craft soda",
+        "NorthStar Hardware Group" to "Contractor supply & home improvement",
+        "Patriot Mutual Trust" to "Civic pension & municipal bond custodian",
+        "Keystone Dairy Co-op" to "Farmer-owned regional nutrition partner",
+        "CedarCrest Hospitals" to "Pediatric & sports medicine regional network",
+        "Founders State Bank" to "Century-old small-business lending partner",
+        "Sunbelt Produce Co." to "Wholesale agricultural & cold-chain grocer",
+        "Union Station Properties" to "Downtown civic transit & retail developer"
     )
 
     private val tier2SponsorPool = listOf(
@@ -233,7 +251,25 @@ object StadiumDealEngine {
         "Pinnacle Aviation" to "International commercial airline carrier",
         "Meridian Biotech" to "Fortune-500 precision medical sciences",
         "Veritas Wealth Partners" to "Institutional asset management group",
-        "Titan Logistics Group" to "Continental freight & supply-chain giant"
+        "Titan Logistics Group" to "Continental freight & supply-chain giant",
+        "Stratosphere Telecom" to "5G wireless carrier & fiber backbone",
+        "Helios Clean Grid" to "Utility-scale solar & battery infrastructure",
+        "Kestrel Aerospace" to "Commercial jetliner & avionics manufacturer",
+        "BlueRidge Financial" to "National investment banking & card network",
+        "Aether Motors" to "Electric SUV & performance sedan automaker",
+        "Monarch Pharmaceuticals" to "Global therapeutics & research giant",
+        "Orion Cloud Security" to "Enterprise zero-trust cybersecurity leader",
+        "Continental Express" to "Global air cargo & parcel delivery network",
+        "Sterling Heavy Industries" to "Clean-tech industrial automation conglomerate",
+        "CobaltStream Media" to "Interactive home entertainment & hardware",
+        "Vertex Medical Robotics" to "Surgical robotics & diagnostics leader",
+        "Atlas Global Insurance" to "Multinational commercial risk underwriter",
+        "Pacific Rim Electronics" to "Consumer displays, audio & smart devices",
+        "CrownPoint Hotels" to "Luxury international hospitality & resorts",
+        "Sovereign Payments" to "Worldwide merchant settlement & fintech rail",
+        "Horizon Defense Tech" to "Satellite navigation & aerospace telemetry",
+        "SilverLine Automotive" to "Autonomous mobility & luxury fleet maker",
+        "Crestview Consumer Brands" to "Global athletic apparel & beverage giant"
     )
 
     private val tier3SponsorPool = listOf(
@@ -242,12 +278,47 @@ object StadiumDealEngine {
         "OmniChain Markets" to "Unregulated leveraged derivatives platform",
         "Vortex Energy Trading" to "Aggressive commodities & carbon hedge fund",
         "QuantumBet Syndicate" to "High-stakes offshore sportsbook operator",
-        "TitanCoin Holdings" to "Volatile crypto treasury & NFT conglomerate"
+        "TitanCoin Holdings" to "Volatile crypto treasury & NFT conglomerate",
+        "BlitzWager Global" to "High-leverage live micro-betting syndicate",
+        "ApexMargin Exchange" to "100x perpetual futures trading venue",
+        "Mirage Digital Assets" to "Cayman-domiciled stablecoin issuer",
+        "TurboLoan Direct" to "Subprime instant fintech credit underwriter",
+        "CipherCash Protocol" to "Privacy-coin liquidity & staking pool",
+        "PhantomOdds International" to "Unlicensed global prop-betting bookmaker",
+        "Krypton Capital Fund" to "Speculative SPAC & short-volatility fund",
+        "Velox FlashCredit" to "High-APR consumer BNPL lending startup",
+        "Nebula Token Labs" to "Web3 metaverse land & gaming token studio",
+        "OmegaLeverage Markets" to "Synthetic equity & crypto options broker",
+        "Solstice Offshore Bank" to "Aggressive tax-haven private wealth desk",
+        "PulseBets Entertainment" to "VIP high-roller mobile casino network",
+        "Zenith Mineral Futures" to "Leveraged lithium & rare-earth speculator",
+        "Obsidian Hedge Partners" to "High-frequency distressed debt syndicate",
+        "AstraMint Exchange" to "Meme-token launchpad & retail margin app",
+        "Valkyrie Crypto Lending" to "Uncollateralized institutional coin lender",
+        "Dynamo Wager Exchange" to "Peer-to-peer international sports exchange",
+        "CobaltCoin Ventures" to "Leveraged blockchain infrastructure fund"
     )
 
     fun qualifiesForUltimatum(franchise: Franchise): Boolean =
         franchise.stadiumAge > ULTIMATUM_AGE_THRESHOLD &&
             franchise.stadiumCondition < ULTIMATUM_CONDITION_THRESHOLD
+
+    fun collectUsedStadiumSponsors(
+        franchises: List<Franchise>,
+        extraExclusions: Collection<String> = emptyList()
+    ): Set<String> = buildSet {
+        franchises.forEach { team ->
+            team.stadium.sponsorName
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { add(it) }
+        }
+        extraExclusions.forEach { name ->
+            name.trim().takeIf { it.isNotEmpty() }?.let { add(it) }
+        }
+    }
+
+    private fun normalizeSponsorKey(name: String): String = name.trim().lowercase()
 
     fun generateNamingRightsOffersForFranchise(
         franchise: Franchise,
@@ -255,79 +326,119 @@ object StadiumDealEngine {
         winsOverride: Int? = null,
         lossesOverride: Int? = null,
         excludeSponsorName: String? = null,
+        excludedSponsorNames: Set<String> = emptySet(),
         random: Random = Random.Default
     ): List<NamingRightsSponsorOffer> {
         val wins = winsOverride ?: franchise.wins
         val losses = lossesOverride ?: franchise.losses
         val hasWinningRecord = wins > losses
-        val marketFactor = (franchise.fanBaseMillions / 2.5).coerceIn(0.85, 1.35)
-        val seedOffset = kotlin.math.abs((franchise.id.hashCode() * 31) + (seasonYear * 17) + random.nextInt(100))
 
-        fun pickFromPool(pool: List<Pair<String, String>>, offset: Int): Pair<String, String> {
-            val filtered = pool.filterNot { it.first.equals(excludeSponsorName, ignoreCase = true) }.ifEmpty { pool }
-            return filtered[offset % filtered.size]
+        val excludedKeys = buildSet {
+            excludeSponsorName?.trim()?.takeIf { it.isNotEmpty() }?.let { add(normalizeSponsorKey(it)) }
+            excludedSponsorNames.forEach { name ->
+                name.trim().takeIf { it.isNotEmpty() }?.let { add(normalizeSponsorKey(it)) }
+            }
+        }.toMutableSet()
+
+        fun pickTwoFromPool(
+            pool: List<Pair<String, String>>,
+            tierLabel: String
+        ): List<Pair<String, String>> {
+            val available = pool
+                .filter { normalizeSponsorKey(it.first) !in excludedKeys }
+                .shuffled(random)
+            val chosen = mutableListOf<Pair<String, String>>()
+            available.take(2).forEach { pair ->
+                chosen.add(pair)
+                excludedKeys.add(normalizeSponsorKey(pair.first))
+            }
+            var suffixCounter = 1
+            while (chosen.size < 2) {
+                val base = pool[(suffixCounter + kotlin.math.abs(franchise.id.hashCode())) % pool.size]
+                val uniqueName = "${base.first} $tierLabel #$suffixCounter"
+                if (normalizeSponsorKey(uniqueName) !in excludedKeys) {
+                    chosen.add(uniqueName to base.second)
+                    excludedKeys.add(normalizeSponsorKey(uniqueName))
+                }
+                suffixCounter++
+            }
+            return chosen
         }
 
-        val t1 = pickFromPool(tier1SponsorPool, seedOffset)
-        val t1Pay = ((5.0 * marketFactor).roundToLong()).coerceIn(4L, 8L)
-        val t1Years = 3 + (seedOffset % 3)
+        val tier1Picks = pickTwoFromPool(tier1SponsorPool, "Civic")
+        val tier2Picks = pickTwoFromPool(tier2SponsorPool, "Corp")
+        val tier3Picks = pickTwoFromPool(tier3SponsorPool, "Global")
 
-        val t2 = pickFromPool(tier2SponsorPool, seedOffset + 2)
-        val t2Pay = ((12.5 * marketFactor).roundToLong()).coerceIn(10L, 18L)
-        val t2Years = 2 + (seedOffset % 3)
+        val offers = mutableListOf<NamingRightsSponsorOffer>()
 
-        val t3 = pickFromPool(tier3SponsorPool, seedOffset + 4)
-        val t3Pay = ((23.0 * marketFactor).roundToLong()).coerceIn(20L, 32L)
-        val t3Years = 2 + ((seedOffset + 1) % 3)
-
-        return listOf(
-            NamingRightsSponsorOffer(
-                id = "nr_${franchise.id}_y${seasonYear}_t1_${seedOffset}",
-                sponsorName = t1.first,
-                tier = 1,
-                termYears = t1Years,
-                annualRevenueMillions = t1Pay,
-                scandalRiskPct = 0,
-                requiresWinningRecord = false,
-                isEligible = true,
-                ineligibilityReason = null,
-                tagline = t1.second,
-                tierTitle = "Tier 1 • Safe / Low Pay",
-                riskSummary = "0% Scandal Risk • Guaranteed civic payout"
-            ),
-            NamingRightsSponsorOffer(
-                id = "nr_${franchise.id}_y${seasonYear}_t2_${seedOffset}",
-                sponsorName = t2.first,
-                tier = 2,
-                termYears = t2Years,
-                annualRevenueMillions = t2Pay,
-                scandalRiskPct = 0,
-                requiresWinningRecord = true,
-                isEligible = hasWinningRecord,
-                ineligibilityReason = if (hasWinningRecord) null else "Requires Winning Record (Current: $wins-$losses)",
-                tagline = t2.second,
-                tierTitle = "Tier 2 • Medium Pay / Contender Req.",
-                riskSummary = if (hasWinningRecord) {
-                    "0% Scandal Risk • Unlocked via $wins-$losses winning record"
-                } else {
-                    "Locked • Requires a winning record ($wins-$losses)"
-                }
-            ),
-            NamingRightsSponsorOffer(
-                id = "nr_${franchise.id}_y${seasonYear}_t3_${seedOffset}",
-                sponsorName = t3.first,
-                tier = 3,
-                termYears = t3Years,
-                annualRevenueMillions = t3Pay,
-                scandalRiskPct = TIER3_SCANDAL_CHANCE_PCT,
-                requiresWinningRecord = false,
-                isEligible = true,
-                ineligibilityReason = null,
-                tagline = t3.second,
-                tierTitle = "Tier 3 • Huge Pay / High Scandal Risk",
-                riskSummary = "${TIER3_SCANDAL_CHANCE_PCT}% Offseason Bankruptcy Scandal Risk"
+        tier1Picks.forEachIndexed { idx, pair ->
+            val pay = random.nextLong(4L, 10L) // Random within Tier 1: $4M - $9M
+            val years = random.nextInt(3, 6) // 3 - 5 yrs
+            offers.add(
+                NamingRightsSponsorOffer(
+                    id = "nr_${franchise.id}_y${seasonYear}_t1_${idx + 1}_${random.nextInt(1000, 9999)}",
+                    sponsorName = pair.first,
+                    tier = 1,
+                    termYears = years,
+                    annualRevenueMillions = pay,
+                    scandalRiskPct = 0,
+                    requiresWinningRecord = false,
+                    isEligible = true,
+                    ineligibilityReason = null,
+                    tagline = pair.second,
+                    tierTitle = "Tier 1 • Safe / Low Pay",
+                    riskSummary = "0% Scandal Risk • Guaranteed civic payout"
+                )
             )
-        )
+        }
+
+        tier2Picks.forEachIndexed { idx, pair ->
+            val pay = random.nextLong(10L, 20L) // Random within Tier 2: $10M - $19M
+            val years = random.nextInt(2, 5) // 2 - 4 yrs
+            offers.add(
+                NamingRightsSponsorOffer(
+                    id = "nr_${franchise.id}_y${seasonYear}_t2_${idx + 1}_${random.nextInt(1000, 9999)}",
+                    sponsorName = pair.first,
+                    tier = 2,
+                    termYears = years,
+                    annualRevenueMillions = pay,
+                    scandalRiskPct = 0,
+                    requiresWinningRecord = true,
+                    isEligible = hasWinningRecord,
+                    ineligibilityReason = if (hasWinningRecord) null else "Requires Winning Record (Current: $wins-$losses)",
+                    tagline = pair.second,
+                    tierTitle = "Tier 2 • Medium Pay / Contender Req.",
+                    riskSummary = if (hasWinningRecord) {
+                        "0% Scandal Risk • Unlocked via $wins-$losses winning record"
+                    } else {
+                        "Locked • Requires a winning record ($wins-$losses)"
+                    }
+                )
+            )
+        }
+
+        tier3Picks.forEachIndexed { idx, pair ->
+            val pay = random.nextLong(20L, 35L) // Random within Tier 3: $20M - $34M
+            val years = random.nextInt(2, 5) // 2 - 4 yrs
+            offers.add(
+                NamingRightsSponsorOffer(
+                    id = "nr_${franchise.id}_y${seasonYear}_t3_${idx + 1}_${random.nextInt(1000, 9999)}",
+                    sponsorName = pair.first,
+                    tier = 3,
+                    termYears = years,
+                    annualRevenueMillions = pay,
+                    scandalRiskPct = TIER3_SCANDAL_CHANCE_PCT,
+                    requiresWinningRecord = false,
+                    isEligible = true,
+                    ineligibilityReason = null,
+                    tagline = pair.second,
+                    tierTitle = "Tier 3 • Huge Pay / High Scandal Risk",
+                    riskSummary = "${TIER3_SCANDAL_CHANCE_PCT}% Offseason Bankruptcy Scandal Risk"
+                )
+            )
+        }
+
+        return offers
     }
 
     fun buildNamingRightsOfferSession(
@@ -338,6 +449,7 @@ object StadiumDealEngine {
         scandalPrDrain: Int = 0,
         winsOverride: Int? = null,
         lossesOverride: Int? = null,
+        excludedSponsorNames: Set<String> = emptySet(),
         random: Random = Random.Default
     ): NamingRightsOfferSession {
         val wins = winsOverride ?: franchise.wins
@@ -348,6 +460,7 @@ object StadiumDealEngine {
             winsOverride = wins,
             lossesOverride = losses,
             excludeSponsorName = previousSponsorName,
+            excludedSponsorNames = excludedSponsorNames,
             random = random
         )
         return NamingRightsOfferSession(
@@ -375,8 +488,11 @@ object StadiumDealEngine {
         scandalPrDrain: Int = 0,
         winsOverride: Int? = null,
         lossesOverride: Int? = null,
+        allFranchises: List<Franchise> = emptyList(),
+        excludedSponsorNames: Set<String> = emptySet(),
         random: Random = Random.Default
     ): StadiumDealState {
+        val combinedExclusions = collectUsedStadiumSponsors(allFranchises, excludedSponsorNames)
         val session = buildNamingRightsOfferSession(
             franchise = franchise,
             seasonYear = seasonYear,
@@ -385,6 +501,7 @@ object StadiumDealEngine {
             scandalPrDrain = scandalPrDrain,
             winsOverride = winsOverride,
             lossesOverride = lossesOverride,
+            excludedSponsorNames = combinedExclusions,
             random = random
         )
         val filteredActive = currentState.activeNamingRightsOffer?.takeIf { it.franchiseId != franchise.id }
@@ -420,7 +537,7 @@ object StadiumDealEngine {
         }
 
         val triggeredScandals = mutableListOf<SponsorBankruptcyScandalEvent>()
-        val triggeredNamingOffers = mutableListOf<NamingRightsOfferSession>()
+        val pendingOfferSpecs = mutableListOf<Triple<Franchise, NamingRightsTriggerReason, Triple<String?, Int, Pair<Int, Int>>>>()
         val sponsorHeadlines = mutableListOf<String>()
         var totalPrDrain = 0
 
@@ -476,16 +593,11 @@ object StadiumDealEngine {
                             ownerApproval = (updatedTeam.ownership.ownerApproval - 3).coerceIn(15, 100)
                         )
                     )
-                    triggeredNamingOffers.add(
-                        buildNamingRightsOfferSession(
-                            franchise = updatedTeam,
-                            seasonYear = seasonYear,
-                            triggerReason = NamingRightsTriggerReason.BANKRUPTCY_SCANDAL,
-                            previousSponsorName = bankruptName,
-                            scandalPrDrain = prDrain,
-                            winsOverride = recordPair.first,
-                            lossesOverride = recordPair.second,
-                            random = random
+                    pendingOfferSpecs.add(
+                        Triple(
+                            updatedTeam,
+                            NamingRightsTriggerReason.BANKRUPTCY_SCANDAL,
+                            Triple(bankruptName, prDrain, recordPair)
                         )
                     )
                 } else {
@@ -493,17 +605,13 @@ object StadiumDealEngine {
                     if (nextYearsLeft == 0) {
                         val expiredName = currentStadium.sponsorName
                         updatedTeam = updatedTeam.copy(stadium = TeamStadium())
-                        val expHeadline = "NAMING RIGHTS EXPIRED: ${expiredName ?: "Arena"} naming rights deal for ${team.teamFullName} has ended — 3 new sponsor offers await selection."
+                        val expHeadline = "NAMING RIGHTS EXPIRED: ${expiredName ?: "Arena"} naming rights deal for ${team.teamFullName} has ended — 6 new sponsor offers await selection."
                         sponsorHeadlines.add(expHeadline)
-                        triggeredNamingOffers.add(
-                            buildNamingRightsOfferSession(
-                                franchise = updatedTeam,
-                                seasonYear = seasonYear,
-                                triggerReason = NamingRightsTriggerReason.CONTRACT_EXPIRED,
-                                previousSponsorName = expiredName,
-                                winsOverride = recordPair.first,
-                                lossesOverride = recordPair.second,
-                                random = random
+                        pendingOfferSpecs.add(
+                            Triple(
+                                updatedTeam,
+                                NamingRightsTriggerReason.CONTRACT_EXPIRED,
+                                Triple(expiredName, 0, recordPair)
                             )
                         )
                     } else {
@@ -517,20 +625,32 @@ object StadiumDealEngine {
                 updatedTeam = updatedTeam.copy(stadium = TeamStadium())
                 val expHeadline = "NAMING RIGHTS EXPIRED: $expiredName naming rights deal for ${team.teamFullName} hit 0 years remaining — select a new sponsor."
                 sponsorHeadlines.add(expHeadline)
-                triggeredNamingOffers.add(
-                    buildNamingRightsOfferSession(
-                        franchise = updatedTeam,
-                        seasonYear = seasonYear,
-                        triggerReason = NamingRightsTriggerReason.CONTRACT_EXPIRED,
-                        previousSponsorName = expiredName,
-                        winsOverride = recordPair.first,
-                        lossesOverride = recordPair.second,
-                        random = random
+                pendingOfferSpecs.add(
+                    Triple(
+                        updatedTeam,
+                        NamingRightsTriggerReason.CONTRACT_EXPIRED,
+                        Triple(expiredName, 0, recordPair)
                     )
                 )
             }
 
             updatedTeam
+        }
+
+        val activeTakenSponsors = collectUsedStadiumSponsors(agedAndSponsoredFranchises).toMutableSet()
+        val triggeredNamingOffers = pendingOfferSpecs.map { (team, reason, meta) ->
+            val session = buildNamingRightsOfferSession(
+                franchise = team,
+                seasonYear = seasonYear,
+                triggerReason = reason,
+                previousSponsorName = meta.first,
+                scandalPrDrain = meta.second,
+                winsOverride = meta.third.first,
+                lossesOverride = meta.third.second,
+                excludedSponsorNames = activeTakenSponsors,
+                random = random
+            )
+            session
         }
 
         val existingIds = buildSet {
@@ -732,6 +852,7 @@ object StadiumDealEngine {
                     seasonYear = ultimatum.seasonYear,
                     triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
                     previousSponsorName = targetTeam.stadium.sponsorName,
+                    allFranchises = updatedTeams,
                     random = random
                 )
                 return StadiumUltimatumOutcome(
@@ -835,6 +956,7 @@ object StadiumDealEngine {
                         seasonYear = ultimatum.seasonYear,
                         triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
                         previousSponsorName = targetTeam.stadium.sponsorName,
+                        allFranchises = updatedTeams,
                         random = random
                     )
                     return StadiumUltimatumOutcome(
@@ -890,6 +1012,7 @@ object StadiumDealEngine {
                     seasonYear = ultimatum.seasonYear,
                     triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
                     previousSponsorName = targetTeam.stadium.sponsorName,
+                    allFranchises = updatedTeams,
                     random = random
                 )
                 return StadiumUltimatumOutcome(
@@ -1021,7 +1144,8 @@ object StadiumDealEngine {
                 franchise = relocatedTeam,
                 seasonYear = vote.seasonYear,
                 triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
-                previousSponsorName = targetTeam.stadium.sponsorName
+                previousSponsorName = targetTeam.stadium.sponsorName,
+                allFranchises = updatedFranchises
             )
             return RelocationVoteOutcome(
                 success = true,
@@ -1123,11 +1247,26 @@ object StadiumDealEngine {
         val targetTeam = franchises.firstOrNull { it.id == session.franchiseId }
             ?: return NamingRightsSelectionOutcome(
                 success = false,
-                message = "Target franchise no longer found.",
+                message = "Target franchise no longer exists.",
                 updatedFranchises = franchises,
                 updatedStadiumDealState = currentState,
                 headline = "Franchise not found."
             )
+
+        val conflictTeam = franchises.firstOrNull {
+            it.id != targetTeam.id &&
+                !it.stadium.sponsorName.isNullOrBlank() &&
+                it.stadium.sponsorName.equals(chosen.sponsorName, ignoreCase = true)
+        }
+        if (conflictTeam != null) {
+            return NamingRightsSelectionOutcome(
+                success = false,
+                message = "${chosen.sponsorName} already holds naming rights for ${conflictTeam.teamFullName}'s stadium.",
+                updatedFranchises = franchises,
+                updatedStadiumDealState = currentState,
+                headline = "Sponsor exclusivity conflict detected."
+            )
+        }
 
         val updatedFranchises = franchises.map { team ->
             if (team.id == targetTeam.id) {
@@ -1142,10 +1281,38 @@ object StadiumDealEngine {
             } else team
         }
 
+        // Refresh any queued sessions so a newly-claimed sponsor is never offered to another franchise's stadium
+        val usedKeysAfterSign = collectUsedStadiumSponsors(updatedFranchises)
+            .map { normalizeSponsorKey(it) }
+            .toSet()
+        val cleanedQueue = currentState.pendingNamingRightsQueue.map { queuedSession ->
+            val hasCollision = queuedSession.offers.any { normalizeSponsorKey(it.sponsorName) in usedKeysAfterSign }
+            if (!hasCollision) {
+                queuedSession
+            } else {
+                val queuedTeam = updatedFranchises.find { it.id == queuedSession.franchiseId }
+                if (queuedTeam != null) {
+                    buildNamingRightsOfferSession(
+                        franchise = queuedTeam,
+                        seasonYear = queuedSession.seasonYear,
+                        triggerReason = queuedSession.triggerReason,
+                        previousSponsorName = queuedSession.previousSponsorName,
+                        scandalPrDrain = queuedSession.scandalPrDrain,
+                        winsOverride = queuedSession.teamWins,
+                        lossesOverride = queuedSession.teamLosses,
+                        excludedSponsorNames = collectUsedStadiumSponsors(
+                            updatedFranchises,
+                            listOfNotNull(queuedSession.previousSponsorName)
+                        )
+                    )
+                } else queuedSession
+            }
+        }
+
         val riskTag = if (chosen.tier == 3) " (${chosen.scandalRiskPct}% scandal risk)" else ""
         val headline = "NAMING RIGHTS SIGNED: ${targetTeam.teamFullName} partner with ${chosen.sponsorName} (Tier ${chosen.tier}) for \$${chosen.annualRevenueMillions}M/yr over ${chosen.termYears} yrs$riskTag!"
-        val nextOffer = currentState.pendingNamingRightsQueue.firstOrNull()
-        val nextOfferQueue = currentState.pendingNamingRightsQueue.drop(1)
+        val nextOffer = cleanedQueue.firstOrNull()
+        val nextOfferQueue = cleanedQueue.drop(1)
         val valBoost = (chosen.annualRevenueMillions / 2L).coerceAtLeast(3L)
 
         return NamingRightsSelectionOutcome(

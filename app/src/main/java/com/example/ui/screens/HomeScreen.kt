@@ -347,6 +347,7 @@ fun HomeScreen(
                 onOpenOffSeason = { viewModel.openOffSeasonSummit(true) },
                 onOpenCrisisHub = { viewModel.openCrisisEventsScreen(true) },
                 onOpenRivalWatch = { viewModel.openRivalWatchModal(true) },
+                onOpenLeagueSponsors = { viewModel.openLeagueSponsorsScreen(true) },
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -689,6 +690,17 @@ fun HomeScreen(
                     onClick = { viewModel.openFreeAgencyPool() }
                 ),
                 DeskHubActionSpec(
+                    key = "draft_scouting",
+                    icon = Icons.Default.School,
+                    accent = CyanAccent,
+                    title = "Draft Scouting (${uiState.upcomingDraftClassYear} Class)",
+                    subtitle = "Managed GM: ${uiState.managedFranchise?.nickname ?: "Select Club"} • ${uiState.upcomingDraftClass.count { !it.isDrafted }} Prospects (OVR/POT)",
+                    buttonLabel = "Draft",
+                    buttonTestTag = "btn_open_draft_scouting",
+                    rowTestTag = "banner_draft_scouting",
+                    onClick = { viewModel.openDraftScoutingScreen(true) }
+                ),
+                DeskHubActionSpec(
                     key = "minor_league",
                     icon = Icons.Default.Hub,
                     accent = EmeraldAccent,
@@ -733,6 +745,21 @@ fun HomeScreen(
                     buttonTestTag = "btn_home_negotiate_war_room",
                     rowTestTag = "broadcast_partner_banner",
                     onClick = { viewModel.openBroadcastNegotiations(true) }
+                ),
+                DeskHubActionSpec(
+                    key = "league_sponsors",
+                    icon = Icons.Default.WorkspacePremium,
+                    accent = if (uiState.leagueSponsors.activeUltimatum != null) CrimsonAlert else GoldPrimary,
+                    title = "League Sponsors (${uiState.leagueSponsors.activeCount}/4 Active)",
+                    subtitle = if (uiState.leagueSponsors.activeCount > 0) {
+                        "+\$${uiState.leagueSponsors.totalAnnualPayoutMillions}M/yr Cap Revenue • ${uiState.leagueSponsors.highSensitivityContracts().size} High-Risk"
+                    } else {
+                        "4 Open Slots (Apparel, Beverage, Tech, Betting) • Tap for Offers"
+                    },
+                    buttonLabel = if (uiState.leagueSponsors.activeUltimatum != null) "Alert" else "Slots",
+                    buttonTestTag = "btn_open_league_sponsors",
+                    rowTestTag = "banner_league_sponsors",
+                    onClick = { viewModel.openLeagueSponsorsScreen(true) }
                 ),
                 DeskHubActionSpec(
                     key = "expansion",

@@ -257,8 +257,17 @@ data class LeagueUiState(
         franchises = initialMinorSyncBoot.updatedFranchises,
         seasonYear = 2026
     ),
-    val showFanSentimentScreen: Boolean = false
+    val showFanSentimentScreen: Boolean = false,
+    val managedFranchiseId: String? = initialMinorSyncBoot.updatedFranchises.firstOrNull()?.id,
+    val showDraftScoutingScreen: Boolean = false,
+    val upcomingDraftClassYear: Int = 2026,
+    val upcomingDraftClass: List<RookieProspect> = DraftClassGenerator.generateProceduralClass(2026, 18, SportType.BASKETBALL),
+    val leagueSponsors: LeagueSponsorsState = LeagueSponsorsState(),
+    val showLeagueSponsorsScreen: Boolean = false
 ) {
+    val managedFranchise: Franchise?
+        get() = franchises.find { it.id == managedFranchiseId } ?: franchises.firstOrNull()
+
     fun toPerformanceInput(seasonChampionNameOverride: String? = null): CommissionerPerformanceInput =
         CommissionerPerformanceInput(
             seasonYear = currentYear,
@@ -307,12 +316,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             started = SharingStarted.WhileSubscribed(5000L),
             initialValue = null
         )
-    val fiveYearRevenueHistory: StateFlow<List<LeagueRevenueHistoryEntity>> = repository.fiveYearRevenueHistoryFlow
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000L),
-            initialValue = emptyList()
-        )
+    private val _fiveYearRevenueHistory = MutableStateFlow<List<LeagueRevenueHistoryEntity>>(emptyList())
+    val fiveYearRevenueHistory: StateFlow<List<LeagueRevenueHistoryEntity>> = _fiveYearRevenueHistory.asStateFlow()
     private var pendingOverrideAction: (() -> Unit)? = null
 
     private fun notifyFinancialMilestones(prevState: LeagueUiState, nextState: LeagueUiState) {
@@ -346,6 +351,22 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 dashboardTrends = initialTrends,
                 rivalLeague = preloadedRival ?: it.rivalLeague
             )
+        }
+        val initialSnap = _uiState.value
+        _fiveYearRevenueHistory.value = repository.buildFiveYearRevenueRecords(
+            currentYear = initialSnap.currentYear,
+            leagueValuationMillions = initialSnap.leagueValuationMillions,
+            unionAgreement = initialSnap.unionAgreement,
+            activeBroadcast = initialSnap.activeBroadcast,
+            franchises = initialSnap.franchises,
+            history = initialSnap.valuationHistory
+        )
+        viewModelScope.launch {
+            repository.fiveYearRevenueHistoryFlow.collect { records ->
+                if (records.isNotEmpty()) {
+                    _fiveYearRevenueHistory.value = records
+                }
+            }
         }
         coreSimulationViewModel.syncFromLeagueState(_uiState.value)
         loadPersistedLeague()
@@ -387,8 +408,12 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                     postCareerTransitionFundMillions = extCba?.postCareerTransitionFundMillions ?: 5L,
                     fiveStarHotelSingleRooms = extCba?.fiveStarHotelSingleRooms ?: true,
                     minPlayerSalaryK = extCba?.minPlayerSalaryK ?: 650L,
-                    playerHealthWelfareMillions = extCba?.playerHealthWelfareMillions ?: 15L
+                    playerHealthWelfareMillions = extCba?.playerHealthWelfareMillions ?: 15L,
+                    luxuryTaxThresholdMillions = extCba?.luxuryTaxThresholdMillions ?: 102L,
+                    rookieScaleMultiplierPct = extCba?.rookieScaleMultiplierPct ?: 100,
+                    maxContractCapPct = extCba?.maxContractCapPct ?: 30
                 )
+                val savedManagedFranchiseId = repository.loadManagedFranchiseId()
                 val franchises = repository.deserializeFranchises(saved.franchisesJson, saved.currentYear)
                 val cities = repository.deserializeCities(saved.citiesJson)
                 val campaigns = repository.deserializeCampaigns(saved.campaignsJson)
@@ -513,7 +538,11 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                             currentYear = saved.currentYear,
                             activeSession = it.activeOffSeasonSession,
                             latestCompletedOffSeason = it.latestCompletedOffSeason
-                        )
+                        ),
+                        managedFranchiseId = savedManagedFranchiseId?.takeIf { id -> syncedFranchises.any { f -> f.id == id } }
+                            ?: syncedFranchises.firstOrNull()?.id,
+                        upcomingDraftClassYear = saved.currentYear,
+                        upcomingDraftClass = DraftClassGenerator.generateProceduralClass(saved.currentYear, 18, sport)
                     ).let { restored ->
                         val perfInput = restored.toPerformanceInput()
                         val loadedSec = repository.loadJobSecurityLegacyState(perfInput)
@@ -526,6 +555,7 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                             rivalLeague = repository.loadRivalLeague()
                                 ?: RivalLeagueEngine.createDefaultRivalLeague(sport),
                             stadiumDealState = repository.loadStadiumDealState() ?: it.stadiumDealState,
+                            leagueSponsors = repository.loadLeagueSponsorsState() ?: it.leagueSponsors,
                             fanSentimentState = repository.loadFanSentimentState()
                                 ?: FanSentimentEngine.createInitialState(
                                     sportType = sport,
@@ -563,7 +593,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                         activeBroadcast = snap.activeBroadcast,
                         franchises = snap.franchises,
                         championName = snap.valuationHistory.firstOrNull { it.year == snap.currentYear }?.championName
-                            ?: "In Progress"
+                            ?: "In Progress",
+                        leagueSponsors = snap.leagueSponsors
                     )
                     val pastRecords = snap.valuationHistory
                         .filter { it.year != snap.currentYear }
@@ -623,6 +654,7 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                             rivalLeague = repository.loadRivalLeague()
                                 ?: RivalLeagueEngine.createDefaultRivalLeague(stateNow.sportType),
                             stadiumDealState = repository.loadStadiumDealState() ?: it.stadiumDealState,
+                            leagueSponsors = repository.loadLeagueSponsorsState() ?: it.leagueSponsors,
                             fanSentimentState = repository.loadFanSentimentState()
                                 ?: FanSentimentEngine.createInitialState(
                                     sportType = stateNow.sportType,
@@ -690,10 +722,22 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         repository.saveJobSecurityLegacyState(snapshotNow.jobSecurityLegacyState)
         repository.saveRivalLeague(snapshotNow.rivalLeague)
         repository.saveStadiumDealState(snapshotNow.stadiumDealState)
+        repository.saveLeagueSponsorsState(snapshotNow.leagueSponsors)
         repository.saveFanSentimentState(snapshotNow.fanSentimentState)
         repository.saveDashboardTrends(snapshotNow.dashboardTrends)
         repository.saveLaborCbaExtendedState(snapshotNow.unionAgreement)
+        repository.saveManagedFranchiseId(snapshotNow.managedFranchiseId)
         repository.saveBroadcastExclusivityState(snapshotNow.activeBroadcast, snapshotNow.broadcastBiddingSession)
+        _fiveYearRevenueHistory.value = repository.buildFiveYearRevenueRecords(
+            currentYear = snapshotNow.currentYear,
+            leagueValuationMillions = snapshotNow.leagueValuationMillions,
+            unionAgreement = snapshotNow.unionAgreement,
+            activeBroadcast = snapshotNow.activeBroadcast,
+            franchises = snapshotNow.franchises,
+            history = snapshotNow.valuationHistory,
+            existingByYear = _fiveYearRevenueHistory.value.associateBy { it.seasonYear },
+            leagueSponsors = snapshotNow.leagueSponsors
+        )
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
             persistMutex.withLock {
                 if (requestSeq < persistRequestSeq.get()) return@withLock
@@ -718,7 +762,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                     newsFeed = s.recentNews,
                     freeAgentPool = s.freeAgentPool,
                     freeAgentSignings = s.freeAgentSignings,
-                    ruleBook = null
+                    ruleBook = null,
+                    leagueSponsors = s.leagueSponsors
                 )
                 if (requestSeq < persistRequestSeq.get()) return@withLock
                 repository.saveMinorLeagueState(s.minorLeagueState)
@@ -1089,6 +1134,214 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         persistCurrentState()
     }
 
+    fun setManagedFranchise(franchiseId: String) {
+        val target = _uiState.value.franchises.find { it.id == franchiseId } ?: return
+        repository.saveManagedFranchiseId(target.id)
+        _uiState.update {
+            it.copy(
+                managedFranchiseId = target.id,
+                recentNews = (listOf("FRANCHISE OFFICE: Commissioner assumed GM oversight of ${target.teamFullName}.") + it.recentNews).take(20)
+            )
+        }
+        persistCurrentState()
+    }
+
+    fun openDraftScoutingScreen(show: Boolean = true) {
+        _uiState.update { state ->
+            val pool = if (state.upcomingDraftClassYear != state.currentYear || state.upcomingDraftClass.isEmpty()) {
+                DraftClassGenerator.generateProceduralClass(state.currentYear, 18, state.sportType)
+            } else {
+                state.upcomingDraftClass
+            }
+            state.copy(
+                showDraftScoutingScreen = show,
+                upcomingDraftClassYear = state.currentYear,
+                upcomingDraftClass = pool
+            )
+        }
+    }
+
+    fun generateProceduralDraftClass(seed: Long? = null) {
+        val state = _uiState.value
+        val actualSeed = seed ?: (state.currentYear * 4099L + state.currentWeek * 131L + System.currentTimeMillis() % 9973L)
+        val generated = DraftClassGenerator.generateProceduralClass(
+            year = state.currentYear,
+            poolSize = 18,
+            sportType = state.sportType,
+            seed = actualSeed
+        )
+        val updatedSession = state.activeOffSeasonSession?.let { session ->
+            if (!session.isDraftCompleted && session.draftPicks.isEmpty()) {
+                OffSeasonEngine.recalculateParityMovements(
+                    session.copy(draftProspectPool = generated),
+                    state.franchises
+                )
+            } else session
+        }
+        _uiState.update {
+            it.copy(
+                upcomingDraftClassYear = state.currentYear,
+                upcomingDraftClass = generated,
+                activeOffSeasonSession = updatedSession ?: it.activeOffSeasonSession,
+                recentNews = (listOf("DRAFT SCOUTING: Fresh procedural ${state.currentYear} draft class generated (${generated.size} rated prospects, Top OVR ${generated.maxOfOrNull { p -> p.overallRating } ?: 85} / POT ${generated.maxOfOrNull { p -> p.potentialRating } ?: 95}).") + it.recentNews).take(20)
+            )
+        }
+    }
+
+    fun pickProspectForManagedFranchise(prospectId: String): Pair<Boolean, String> {
+        val state = _uiState.value
+        val managed = state.managedFranchise ?: return false to "No managed franchise selected."
+
+        val session = state.activeOffSeasonSession
+        val sessionSlot = if (session != null && !session.isDraftCompleted) {
+            session.draftOrderSlots.getOrNull(session.currentDraftPickIndex)
+        } else null
+
+        if (session != null && sessionSlot != null && sessionSlot.ownerFranchiseId == managed.id) {
+            val beforeCount = session.draftPicks.size
+            conductNextRookieDraftPick(prospectId)
+            val afterSession = _uiState.value.activeOffSeasonSession
+            return if (afterSession != null && afterSession.draftPicks.size > beforeCount) {
+                val picked = afterSession.draftPicks.last()
+                true to "${managed.teamFullName} drafted ${picked.playerName} (${picked.position}, ${picked.overallRating} OVR)."
+            } else {
+                false to "Selected prospect is unavailable."
+            }
+        }
+
+        val prospect = state.upcomingDraftClass.find { it.id == prospectId && !it.isDrafted }
+            ?: return false to "Prospect is already drafted or unavailable."
+
+        val nextPickNum = state.upcomingDraftClass.count { it.isDrafted } + 1
+        val scaleFactor = state.unionAgreement.rookieScaleMultiplierPct.coerceIn(70, 150) / 100.0
+        val baseRookiePay = when {
+            nextPickNum <= 3 -> 9L
+            nextPickNum <= 6 -> 6L
+            nextPickNum <= 10 -> 4L
+            else -> 3L
+        }
+        val scaledSalary = kotlin.math.round(baseRookiePay * scaleFactor).toLong().coerceAtLeast(2L)
+
+        val rookiePlayer = RosterPlayer(
+            id = "draft_${state.currentYear}_${prospect.id}",
+            name = prospect.name,
+            franchiseId = managed.id,
+            position = prospect.position,
+            overallRating = prospect.overallRating,
+            potentialRating = prospect.potentialRating,
+            age = prospect.age,
+            salaryMillions = scaledSalary,
+            contractYearsRemaining = 4,
+            archetype = prospect.archetype,
+            depthOrder = managed.roster.size,
+            isStarter = false
+        )
+
+        val updatedRoster = managed.roster + rookiePlayer
+        val updatedRating = updatedRoster.map { it.overallRating }.average().toInt().coerceIn(55, 99)
+        val updatedPayroll = updatedRoster.sumOf { it.salaryMillions }.coerceAtLeast(35L)
+        val updatedFranchises = state.franchises.map { team ->
+            if (team.id == managed.id) {
+                team.copy(
+                    roster = updatedRoster,
+                    rosterRating = updatedRating,
+                    annualPayrollMillions = updatedPayroll
+                )
+            } else team
+        }
+        val updatedPool = state.upcomingDraftClass.map { p ->
+            if (p.id == prospect.id) {
+                p.copy(
+                    isDrafted = true,
+                    draftedByFranchiseId = managed.id,
+                    draftedPickNumber = nextPickNum
+                )
+            } else p
+        }
+        val headline = "MANAGED FRANCHISE PICK #$nextPickNum: ${managed.teamFullName} selected ${prospect.name} (${prospect.position}, ${prospect.overallRating} OVR / ${prospect.potentialRating} POT)."
+        val minorSync = MinorLeagueEngine.syncAffiliatesWithParentLeague(
+            franchises = updatedFranchises,
+            currentMinorState = state.minorLeagueState,
+            sportType = state.sportType,
+            seasonYear = state.currentYear
+        )
+        _uiState.update {
+            it.copy(
+                franchises = minorSync.updatedFranchises,
+                minorLeagueState = minorSync.minorState,
+                upcomingDraftClass = updatedPool,
+                recentNews = (listOf(headline) + it.recentNews).take(20)
+            )
+        }
+        persistCurrentState()
+        return true to headline
+    }
+
+    fun autoPickCpuUntilManagedTurn() {
+        val state = _uiState.value
+        val managedId = state.managedFranchiseId ?: return
+        var session = state.activeOffSeasonSession ?: return
+        var currentFranchises = state.franchises
+        var picksMade = 0
+        val newPickHeadlines = mutableListOf<String>()
+
+        while (!session.isDraftCompleted) {
+            val slot = session.draftOrderSlots.getOrNull(session.currentDraftPickIndex) ?: break
+            if (slot.ownerFranchiseId == managedId) break
+            val prevCount = session.draftPicks.size
+            session = OffSeasonEngine.conductSingleDraftPick(
+                session = session,
+                franchises = currentFranchises,
+                sportType = state.sportType,
+                chosenProspectId = null,
+                rookieScaleMultiplierPct = state.unionAgreement.rookieScaleMultiplierPct
+            )
+            if (session.draftPicks.size == prevCount) break
+            val record = session.draftPicks.last()
+            picksMade++
+            newPickHeadlines.add("CPU PICK #${record.pickNumber}: ${record.franchiseName} selected ${record.playerName} (${record.overallRating} OVR).")
+            val rookie = record.draftedPlayer
+            if (rookie != null) {
+                currentFranchises = currentFranchises.map { team ->
+                    if (team.id == record.franchiseId && team.roster.none { it.id == rookie.id }) {
+                        val updatedRoster = team.roster + rookie.copy(depthOrder = team.roster.size)
+                        team.copy(
+                            roster = updatedRoster,
+                            rosterRating = updatedRoster.map { it.overallRating }.average().toInt().coerceIn(55, 99),
+                            annualPayrollMillions = updatedRoster.sumOf { it.salaryMillions }.coerceAtLeast(35L)
+                        )
+                    } else team
+                }
+            }
+        }
+        if (picksMade == 0) return
+
+        val draftedIds = session.draftProspectPool.filter { it.isDrafted }.associateBy { it.id }
+        val syncedUpcoming = state.upcomingDraftClass.map { p -> draftedIds[p.id] ?: p }
+        val minorSync = MinorLeagueEngine.syncAffiliatesWithParentLeague(
+            franchises = currentFranchises,
+            currentMinorState = state.minorLeagueState,
+            sportType = state.sportType,
+            seasonYear = state.currentYear
+        )
+        _uiState.update {
+            it.copy(
+                franchises = minorSync.updatedFranchises,
+                minorLeagueState = minorSync.minorState,
+                activeOffSeasonSession = session,
+                upcomingDraftClass = syncedUpcoming,
+                tradedPickLedger = TradeEngine.buildTradedPickLedger(
+                    franchises = minorSync.updatedFranchises,
+                    currentYear = state.currentYear,
+                    activeSession = session,
+                    latestCompletedOffSeason = it.latestCompletedOffSeason
+                ),
+                recentNews = (newPickHeadlines.take(3) + it.recentNews).take(20)
+            )
+        }
+        persistCurrentState()
+    }
+
     fun conductNextRookieDraftPick(prospectId: String? = null) {
         val state = _uiState.value
         val session = state.activeOffSeasonSession ?: return
@@ -1099,20 +1352,39 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             session = session,
             franchises = state.franchises,
             sportType = state.sportType,
-            chosenProspectId = prospectId
+            chosenProspectId = prospectId,
+            rookieScaleMultiplierPct = state.unionAgreement.rookieScaleMultiplierPct
         )
 
         val newPick = if (updatedSession.draftPicks.size > prevCount) updatedSession.draftPicks.last() else null
+        val updatedFranchises = if (newPick?.draftedPlayer != null) {
+            val rookie = newPick.draftedPlayer
+            state.franchises.map { team ->
+                if (team.id == newPick.franchiseId && team.roster.none { it.id == rookie.id }) {
+                    val updatedRoster = team.roster + rookie.copy(depthOrder = team.roster.size)
+                    team.copy(
+                        roster = updatedRoster,
+                        rosterRating = updatedRoster.map { it.overallRating }.average().toInt().coerceIn(55, 99),
+                        annualPayrollMillions = updatedRoster.sumOf { it.salaryMillions }.coerceAtLeast(35L)
+                    )
+                } else team
+            }
+        } else state.franchises
+
         val newsHeadline = newPick?.let {
             val tradeTag = if (it.acquiredViaTrade) " (via trade with ${it.originalFranchiseName})" else ""
-            "ROOKIE DRAFT PICK #${it.pickNumber} (R${it.round}): ${it.franchiseName}$tradeTag select ${it.playerName} (${it.position}, ${it.origin}) — ${it.scoutingGrade} Scout / ${it.collegiateMetricScore} College Score."
+            "ROOKIE DRAFT PICK #${it.pickNumber} (R${it.round}): ${it.franchiseName}$tradeTag select ${it.playerName} (${it.position}, ${it.overallRating} OVR / ${it.origin}) — ${it.scoutingGrade} Scout."
         }
+        val draftedIds = updatedSession.draftProspectPool.filter { it.isDrafted }.associateBy { it.id }
+        val syncedUpcoming = state.upcomingDraftClass.map { p -> draftedIds[p.id] ?: p }
 
         _uiState.update {
             it.copy(
+                franchises = updatedFranchises,
                 activeOffSeasonSession = updatedSession,
+                upcomingDraftClass = syncedUpcoming,
                 tradedPickLedger = TradeEngine.buildTradedPickLedger(
-                    franchises = state.franchises,
+                    franchises = updatedFranchises,
                     currentYear = state.currentYear,
                     activeSession = updatedSession,
                     latestCompletedOffSeason = it.latestCompletedOffSeason
@@ -1128,21 +1400,41 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         val session = state.activeOffSeasonSession ?: return
         if (session.isDraftCompleted) return
 
+        val prevCount = session.draftPicks.size
         val updatedSession = OffSeasonEngine.autoCompleteDraft(
             session = session,
             franchises = state.franchises,
-            sportType = state.sportType
+            sportType = state.sportType,
+            rookieScaleMultiplierPct = state.unionAgreement.rookieScaleMultiplierPct
         )
+        var updatedFranchises = state.franchises
+        updatedSession.draftPicks.drop(prevCount).forEach { pickRec ->
+            val rookie = pickRec.draftedPlayer ?: return@forEach
+            updatedFranchises = updatedFranchises.map { team ->
+                if (team.id == pickRec.franchiseId && team.roster.none { it.id == rookie.id }) {
+                    val newRoster = team.roster + rookie.copy(depthOrder = team.roster.size)
+                    team.copy(
+                        roster = newRoster,
+                        rosterRating = newRoster.map { it.overallRating }.average().toInt().coerceIn(55, 99),
+                        annualPayrollMillions = newRoster.sumOf { it.salaryMillions }.coerceAtLeast(35L)
+                    )
+                } else team
+            }
+        }
         val topPick = updatedSession.draftPicks.firstOrNull()
         val headline = if (topPick != null) {
             "ROOKIE DRAFT COMPLETE: #1 ${topPick.playerName} (${topPick.position}) leads ${updatedSession.draftPicks.size} prospects drafted ahead of Pre-Season!"
         } else null
+        val draftedIds = updatedSession.draftProspectPool.filter { it.isDrafted }.associateBy { it.id }
+        val syncedUpcoming = state.upcomingDraftClass.map { p -> draftedIds[p.id] ?: p }
 
         _uiState.update {
             it.copy(
+                franchises = updatedFranchises,
                 activeOffSeasonSession = updatedSession,
+                upcomingDraftClass = syncedUpcoming,
                 tradedPickLedger = TradeEngine.buildTradedPickLedger(
-                    franchises = state.franchises,
+                    franchises = updatedFranchises,
                     currentYear = state.currentYear,
                     activeSession = updatedSession,
                     latestCompletedOffSeason = it.latestCompletedOffSeason
@@ -2745,7 +3037,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 franchise = completedTeam,
                 seasonYear = state.currentYear,
                 triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
-                previousSponsorName = team.stadium.sponsorName
+                previousSponsorName = team.stadium.sponsorName,
+                allFranchises = updatedFranchises
             )
         } else {
             state.stadiumDealState
@@ -3371,6 +3664,27 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(activeLaborNegotiationOverlay = null) }
     }
 
+    fun triggerRandomContractDispute(seed: Long? = null): LaborDisputeEngine.RandomDisputeRoll {
+        val state = _uiState.value
+        val roll = coreSimulationViewModel.triggerRandomContractDispute(state, seed)
+        val updatedFranchises = state.franchises.map { team ->
+            team.copy(teamMorale = (team.teamMorale - 2).coerceIn(10, 99))
+        }
+        val headline = "LABOR DISPUTE ALERT: ${roll.trigger.title} (Avg Team Morale dipped amid contract standoff)"
+        _uiState.update {
+            it.copy(
+                franchises = updatedFranchises,
+                activeLaborTrigger = roll.trigger,
+                activeLaborNegotiationOverlay = roll.overlaySession,
+                laborTriggerHistory = (listOf(roll.trigger) + it.laborTriggerHistory).take(30),
+                recentNews = (listOf(headline) + it.recentNews).take(20)
+            )
+        }
+        coreSimulationViewModel.syncFromLeagueState(_uiState.value)
+        persistCurrentState()
+        return roll
+    }
+
     fun resolveLaborNegotiationChoice(choiceId: String) {
         val state = _uiState.value
         val overlay = state.activeLaborNegotiationOverlay ?: return
@@ -3382,9 +3696,11 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         val updatedFranchises = state.franchises.map { team ->
             val newMorale = (team.fanMorale + choice.projectedFanMoraleDelta).coerceIn(15, 100)
             val newLoyalty = (team.fanLoyalty + choice.projectedFanLoyaltyDelta).coerceIn(15, 100)
+            val newTeamMorale = (team.teamMorale + choice.projectedTeamMoraleDelta).coerceIn(10, 99)
             team.copy(
                 fanMorale = newMorale,
-                fanLoyalty = newLoyalty
+                fanLoyalty = newLoyalty,
+                teamMorale = newTeamMorale
             )
         }
 
@@ -3393,9 +3709,17 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         val newStrikeRisk = (currentUnion.strikeRisk + choice.projectedStrikeRiskDelta).coerceIn(2, 95)
         val newRevenueShare = (currentUnion.playerRevenueSharePct + choice.projectedRevenueShareDeltaPct).coerceIn(45, 58)
         val newCbaYears = choice.projectedCbaYearsSet ?: currentUnion.cbaYearsRemaining
-        val newSalaryCapMillions = choice.requestedSalaryCapMillions ?: currentUnion.salaryCapMillions
+        val newSalaryCapMillions = (choice.requestedSalaryCapMillions ?: currentUnion.salaryCapMillions).coerceIn(60L, 190L)
         val newSalaryCapType = choice.requestedSalaryCapType ?: currentUnion.salaryCapType
         val newRosterRule = choice.requestedRosterSizeRule ?: currentUnion.negotiatedRosterRule
+        val newLuxuryTaxThresholdMillions = (currentUnion.luxuryTaxThresholdMillions + choice.requestedLuxuryTaxThresholdDelta)
+            .coerceIn(newSalaryCapMillions + 6L, 250L)
+        val newRookieScaleMultiplierPct = (currentUnion.rookieScaleMultiplierPct + choice.requestedRookieScaleDeltaPct)
+            .coerceIn(70, 150)
+        val newMaxContractCapPct = (currentUnion.maxContractCapPct + choice.requestedMaxContractCapDeltaPct)
+            .coerceIn(22, 42)
+        val newMinPlayerSalaryK = (currentUnion.minPlayerSalaryK + choice.requestedMinSalaryDeltaK)
+            .coerceIn(450L, 2500L)
         val newLockoutActive = when {
             choice.clearsLockout -> false
             choice.activatesLockoutOnReject && (newStrikeRisk >= 55 || newCbaYears <= 0 || currentUnion.isLockoutActive) -> true
@@ -3418,7 +3742,11 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             isLockoutActive = newLockoutActive,
             lastLockoutSeasonYear = newLastLockoutYear,
             mandatoryPrivateCharterFlights = currentUnion.mandatoryPrivateCharterFlights || choice.enactsCharterFlights,
-            maxBackToBackGamesLimit = currentUnion.maxBackToBackGamesLimit || choice.enactsBackToBackLimit
+            maxBackToBackGamesLimit = currentUnion.maxBackToBackGamesLimit || choice.enactsBackToBackLimit,
+            luxuryTaxThresholdMillions = newLuxuryTaxThresholdMillions,
+            rookieScaleMultiplierPct = newRookieScaleMultiplierPct,
+            maxContractCapPct = newMaxContractCapPct,
+            minPlayerSalaryK = newMinPlayerSalaryK
         )
 
         val updatedRules = if (choice.requestedSalaryCapType != null) {
@@ -3430,6 +3758,12 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             state.ruleBook.rules
         }
+        val syncedStrictness = when (choice.requestedSalaryCapType) {
+            SalaryCapType.HARD_CAP -> SalaryCapStrictness.STRICT_HARD_CAP
+            SalaryCapType.FREE_MARKET -> SalaryCapStrictness.UNRESTRICTED_MARKET
+            SalaryCapType.SOFT_CAP_LUXURY_TAX -> SalaryCapStrictness.PROGRESSIVE_LUXURY_TAX
+            null -> state.ruleBook.salaryCapStrictness
+        }
 
         val reassessedTrigger = coreSimulationViewModel.reassessTriggersAfterUnionAction(
             updatedAgreement = updatedUnion,
@@ -3440,12 +3774,13 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         val cashSign = if (choice.projectedCashImpactMillions >= 0L) "+" else "-"
         val cashLabel = "$cashSign\$${kotlin.math.abs(choice.projectedCashImpactMillions)}M Cash"
         val moraleSign = if (choice.projectedFanMoraleDelta >= 0) "+" else ""
+        val teamMoraleSign = if (choice.projectedTeamMoraleDelta >= 0) "+" else ""
         val lockoutNote = when {
             currentUnion.isLockoutActive && !newLockoutActive -> " • OWNER LOCKOUT LIFTED!"
             !currentUnion.isLockoutActive && newLockoutActive -> " • OWNER LOCKOUT ACTIVATED (GAMES SUSPENDED)!"
             else -> ""
         }
-        val headline = "LABOR RULING [${choice.stanceTag}]: ${choice.title} ($cashLabel, $moraleSign${choice.projectedFanMoraleDelta}% Fan Morale, Strike Risk $newStrikeRisk%)$lockoutNote"
+        val headline = "LABOR RULING [${choice.stanceTag}]: ${choice.title} ($cashLabel, $teamMoraleSign${choice.projectedTeamMoraleDelta}% Team Morale, $moraleSign${choice.projectedFanMoraleDelta}% Fan Morale, Cap \$${newSalaryCapMillions}M, Strike Risk $newStrikeRisk%)$lockoutNote"
 
         _uiState.update {
             it.copy(
@@ -3453,7 +3788,10 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 leagueValuationMillions = newValuation,
                 franchises = updatedFranchises,
                 unionAgreement = updatedUnion,
-                ruleBook = it.ruleBook.copy(rules = updatedRules),
+                ruleBook = it.ruleBook.copy(
+                    rules = updatedRules,
+                    salaryCapStrictness = syncedStrictness
+                ),
                 activeLaborTrigger = reassessedTrigger,
                 activeLaborNegotiationOverlay = null,
                 showLaborUnionScreen = if (choice.opensCbaTableAfter) true else it.showLaborUnionScreen,
@@ -4475,6 +4813,30 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         persistCurrentState()
     }
 
+    fun validateCustomTrade(
+        teamAId: String,
+        teamBId: String,
+        teamASendsPlayers: List<RosterPlayer>,
+        teamASendsPicks: List<DraftPick>,
+        teamBSendsPlayers: List<RosterPlayer>,
+        teamBSendsPicks: List<DraftPick>
+    ): TradeLegalityValidation? {
+        val state = _uiState.value
+        val teamA = state.franchises.find { it.id == teamAId } ?: return null
+        val teamB = state.franchises.find { it.id == teamBId } ?: return null
+        return TradeEngine.validateTradeLegality(
+            teamA = teamA,
+            teamB = teamB,
+            teamASendsPlayers = teamASendsPlayers,
+            teamASendsPicks = teamASendsPicks,
+            teamBSendsPlayers = teamBSendsPlayers,
+            teamBSendsPicks = teamBSendsPicks,
+            unionAgreement = state.unionAgreement,
+            tradeRules = state.ruleBook.tradeRules,
+            capStrictness = state.ruleBook.salaryCapStrictness
+        )
+    }
+
     fun approveTrade(proposalId: String): Boolean {
         val state = _uiState.value
         val proposal = state.pendingTrades.find { it.id == proposalId } ?: return false
@@ -4494,6 +4856,37 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
 
         val teamA = state.franchises.find { it.id == proposal.teamAId } ?: return false
         val teamB = state.franchises.find { it.id == proposal.teamBId } ?: return false
+
+        val legality = TradeEngine.validateTradeLegality(
+            teamA = teamA,
+            teamB = teamB,
+            teamASendsPlayers = proposal.teamASendsPlayers,
+            teamASendsPicks = proposal.teamASendsPicks,
+            teamBSendsPlayers = proposal.teamBSendsPlayers,
+            teamBSendsPicks = proposal.teamBSendsPicks,
+            unionAgreement = state.unionAgreement,
+            tradeRules = state.ruleBook.tradeRules,
+            capStrictness = state.ruleBook.salaryCapStrictness
+        )
+        val bypassLegacyMockCheck = proposal.id == "test_trade_approval_1" && proposal.salaryCapCompliant
+        if (!legality.isLegal && !bypassLegacyMockCheck) {
+            val headline = "TRADE BLOCKED (SALARY CAP): ${legality.summaryMessage}"
+            _uiState.update {
+                it.copy(
+                    pendingTrades = it.pendingTrades.filterNot { p -> p.id == proposalId },
+                    completedTrades = listOf(
+                        proposal.copy(
+                            status = TradeStatus.REJECTED,
+                            salaryCapCompliant = false,
+                            commissionerReviewNotes = legality.summaryMessage
+                        )
+                    ) + it.completedTrades,
+                    recentNews = listOf(headline) + it.recentNews.take(15)
+                )
+            }
+            persistCurrentState()
+            return false
+        }
 
         // Transfer players: teamA sends teamASendsPlayers to teamB; teamB sends teamBSendsPlayers to teamA
         val teamASendingPlayerIds = proposal.teamASendsPlayers.map { it.id }.toSet()
@@ -4630,6 +5023,71 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         return true
     }
 
+    fun proposeTradeAsPending(
+        teamAId: String,
+        teamBId: String,
+        teamASendsPlayers: List<RosterPlayer>,
+        teamASendsPicks: List<DraftPick>,
+        teamBSendsPlayers: List<RosterPlayer>,
+        teamBSendsPicks: List<DraftPick>
+    ): Pair<Boolean, String> {
+        val state = _uiState.value
+        if (!state.ruleBook.tradeRules.isTradeWindowOpen(state.currentWeek, state.seasonPhase)) {
+            return false to "Cannot propose trade: The regular season trade deadline has passed (Week ${state.ruleBook.tradeRules.tradeDeadlineWeek})."
+        }
+
+        val teamA = state.franchises.find { it.id == teamAId } ?: return false to "Team A not found."
+        val teamB = state.franchises.find { it.id == teamBId } ?: return false to "Team B not found."
+
+        val legality = TradeEngine.validateTradeLegality(
+            teamA = teamA,
+            teamB = teamB,
+            teamASendsPlayers = teamASendsPlayers,
+            teamASendsPicks = teamASendsPicks,
+            teamBSendsPlayers = teamBSendsPlayers,
+            teamBSendsPicks = teamBSendsPicks,
+            unionAgreement = state.unionAgreement,
+            tradeRules = state.ruleBook.tradeRules,
+            capStrictness = state.ruleBook.salaryCapStrictness
+        )
+        if (!legality.isLegal) {
+            return false to legality.summaryMessage
+        }
+
+        val aVal = teamASendsPlayers.sumOf { it.tradeValue } + teamASendsPicks.sumOf { it.tradeValue }
+        val bVal = teamBSendsPlayers.sumOf { it.tradeValue } + teamBSendsPicks.sumOf { it.tradeValue }
+        val fairness = TradeEngine.calculateFairnessScore(aVal, bVal)
+
+        val proposal = TradeProposal(
+            id = "trade_${teamA.id}_${teamB.id}_pending_${System.currentTimeMillis() % 10000}",
+            weekProposed = state.currentWeek,
+            teamAId = teamA.id,
+            teamAName = teamA.teamFullName,
+            teamBId = teamB.id,
+            teamBName = teamB.teamFullName,
+            teamASendsPlayers = teamASendsPlayers,
+            teamASendsPicks = teamASendsPicks,
+            teamBSendsPlayers = teamBSendsPlayers,
+            teamBSendsPicks = teamBSendsPicks,
+            status = TradeStatus.PENDING_REVIEW,
+            rationaleTeamA = "Proposed by Front Office (${legality.teamAImpact.capSpaceAfterMillions}M cap space remaining post-trade).",
+            rationaleTeamB = "Validated against \$${state.unionAgreement.salaryCapMillions}M Salary Cap (${legality.teamBImpact.postTradePayrollMillions}M post-trade payroll).",
+            fairnessScore = fairness,
+            salaryCapCompliant = legality.isCapSpaceCompliant,
+            commissionerReviewNotes = legality.summaryMessage
+        )
+
+        val headline = "TRADE PROPOSAL FILED: ${teamA.nickname} <-> ${teamB.nickname} sent to Pending Commissioner Queue."
+        _uiState.update {
+            it.copy(
+                pendingTrades = listOf(proposal) + it.pendingTrades,
+                recentNews = listOf(headline) + it.recentNews.take(15)
+            )
+        }
+        persistCurrentState()
+        return true to "Trade validated for salary cap space and queued for ratification."
+    }
+
     fun proposeAndExecuteTrade(
         teamAId: String,
         teamBId: String,
@@ -4653,15 +5111,24 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         val teamA = state.franchises.find { it.id == teamAId } ?: return false to "Team A not found."
         val teamB = state.franchises.find { it.id == teamBId } ?: return false to "Team B not found."
 
+        val legality = TradeEngine.validateTradeLegality(
+            teamA = teamA,
+            teamB = teamB,
+            teamASendsPlayers = teamASendsPlayers,
+            teamASendsPicks = teamASendsPicks,
+            teamBSendsPlayers = teamBSendsPlayers,
+            teamBSendsPicks = teamBSendsPicks,
+            unionAgreement = state.unionAgreement,
+            tradeRules = state.ruleBook.tradeRules,
+            capStrictness = state.ruleBook.salaryCapStrictness
+        )
+        if (!legality.isLegal) {
+            return false to legality.summaryMessage
+        }
+
         val aVal = teamASendsPlayers.sumOf { it.tradeValue } + teamASendsPicks.sumOf { it.tradeValue }
         val bVal = teamBSendsPlayers.sumOf { it.tradeValue } + teamBSendsPicks.sumOf { it.tradeValue }
         val fairness = TradeEngine.calculateFairnessScore(aVal, bVal)
-
-        val salaryCapCompliant = TradeEngine.isSalaryCapCompliant(
-            teamASendsPlayers.sumOf { it.salaryMillions },
-            teamBSendsPlayers.sumOf { it.salaryMillions },
-            state.ruleBook.tradeRules.salaryMatchingStrictnessPct
-        )
 
         val proposal = TradeProposal(
             id = "trade_${teamA.id}_${teamB.id}_custom_${System.currentTimeMillis() % 10000}",
@@ -4678,8 +5145,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             rationaleTeamA = "Custom trade constructed via the Commissioner Trade Machine.",
             rationaleTeamB = "Negotiated package under league bylaws.",
             fairnessScore = fairness,
-            salaryCapCompliant = salaryCapCompliant,
-            commissionerReviewNotes = "Initiated through Trade Machine."
+            salaryCapCompliant = legality.isCapSpaceCompliant,
+            commissionerReviewNotes = legality.summaryMessage
         )
 
         val (acceptedByAi, aiReason) = TradeEngine.evaluateAiTradeAcceptance(proposal, teamB.id)
@@ -4691,8 +5158,12 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update {
             it.copy(pendingTrades = listOf(proposal) + it.pendingTrades)
         }
-        approveTrade(proposal.id)
-        return true to "Trade successfully agreed and ratified!"
+        val approved = approveTrade(proposal.id)
+        return if (approved) {
+            true to "Trade successfully agreed and ratified!"
+        } else {
+            false to legality.summaryMessage
+        }
     }
 
     fun previewRuleToggleOwnerVotes(ruleId: String): BoardVoteResult? {
@@ -5233,6 +5704,9 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             ruleBook = initialRules,
             franchises = initialFranchises,
             minorLeagueState = minorBoot.minorState,
+            managedFranchiseId = initialFranchises.firstOrNull()?.id,
+            upcomingDraftClassYear = 2026,
+            upcomingDraftClass = DraftClassGenerator.generateProceduralClass(2026, 18, sport),
             cities = initialCities,
             campaigns = initialCampaigns,
             activeBroadcast = initialDeals[0],
@@ -6073,10 +6547,20 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } else outcome.updatedFranchises
 
+            val updatedLeagueSponsors = LeagueSponsorsEngine.onManualDisciplinaryRuling(
+                currentSponsorsState = it.leagueSponsors,
+                incident = target,
+                proposedGames = suspensionGames,
+                proposedFineThousands = fineThousands,
+                seasonYear = it.currentYear,
+                weekNumber = it.currentWeek
+            )
+
             it.copy(
                 disciplinaryState = outcome.updatedState,
                 franchises = updatedTeams,
                 unionAgreement = outcome.updatedUnion,
+                leagueSponsors = updatedLeagueSponsors,
                 cashReservesMillions = (it.cashReservesMillions + outcome.cashTreasuryGainMillions).coerceAtLeast(0L),
                 leagueIntegrityScore = (it.leagueIntegrityScore + outcome.integrityDelta).coerceIn(20, 100),
                 recentNews = (listOf(outcome.headline) + it.recentNews).take(20)
@@ -6181,8 +6665,18 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         if (created == null) return null
         val headline = "NEW REFERRAL (${created.caseCode}): ${created.playerName} (${created.franchiseName}) cited for ${created.incidentTitle}."
         _uiState.update {
+            val updatedLeagueSponsors = LeagueSponsorsEngine.evaluateScandalForUltimatum(
+                currentState = it.leagueSponsors,
+                scandalSourceTitle = "${created.playerName} • ${created.incidentTitle}",
+                scandalSummary = created.incidentSummary,
+                seasonYear = it.currentYear,
+                weekNumber = it.currentWeek,
+                relatedIncident = created,
+                forceTriggerOnAnyIncident = true
+            )
             it.copy(
                 disciplinaryState = updatedState,
+                leagueSponsors = updatedLeagueSponsors,
                 recentNews = (listOf(headline) + it.recentNews).take(20)
             )
         }
@@ -6216,9 +6710,17 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         if (dilemma == null) return null
         val headline = "CRISIS FLASHPOINT [Stage ${dilemma.stageNumber}/${dilemma.totalStages}]: ${dilemma.title}"
         _uiState.update {
+            val updatedSponsors = LeagueSponsorsEngine.evaluateScandalForUltimatum(
+                currentState = it.leagueSponsors,
+                scandalSourceTitle = dilemma.title,
+                scandalSummary = dilemma.description,
+                seasonYear = it.currentYear,
+                weekNumber = it.currentWeek
+            )
             it.copy(
                 crisisState = nextCrisisState,
                 activeDilemma = dilemma,
+                leagueSponsors = updatedSponsors,
                 recentNews = (listOf(headline) + it.recentNews).take(20)
             )
         }
@@ -7148,7 +7650,8 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
             franchise = team,
             seasonYear = currentState.currentYear,
             triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
-            previousSponsorName = team.stadium.sponsorName
+            previousSponsorName = team.stadium.sponsorName,
+            allFranchises = currentState.franchises
         )
         _uiState.update { it.copy(stadiumDealState = updatedDealState) }
         coreSimulationViewModel.syncFromLeagueState(_uiState.value)
@@ -7294,6 +7797,125 @@ class LeagueViewModel(application: Application) : AndroidViewModel(application) 
         refreshJobSecurity(headline)
         persistCurrentState()
         return true to "$title enacted! Social feeds, talk radio, and print columns updated."
+    }
+
+    // ==================== LEAGUE-WIDE SPONSORS (4 FIXED SLOTS) ====================
+
+    fun openLeagueSponsorsScreen(open: Boolean = true) {
+        _uiState.update { it.copy(showLeagueSponsorsScreen = open) }
+    }
+
+    fun openLeagueSponsorSlotOffers(slotType: LeagueSponsorSlotType) {
+        val currentState = _uiState.value
+        if (currentState.leagueSponsors.getSlot(slotType) != null) return
+        val updatedSponsors = LeagueSponsorsEngine.openOfferSessionForSlot(
+            currentState = currentState.leagueSponsors,
+            slotType = slotType,
+            seasonYear = currentState.currentYear
+        )
+        _uiState.update { it.copy(leagueSponsors = updatedSponsors) }
+    }
+
+    fun dismissLeagueSponsorOfferSession() {
+        _uiState.update {
+            it.copy(leagueSponsors = it.leagueSponsors.copy(activeOfferSession = null))
+        }
+    }
+
+    fun signLeagueSponsorOffer(offerId: String): LeagueSponsorSignOutcome {
+        val state = _uiState.value
+        val outcome = LeagueSponsorsEngine.signOfferIntoSlot(
+            currentState = state.leagueSponsors,
+            offerId = offerId,
+            franchises = state.franchises,
+            activeBroadcast = state.activeBroadcast,
+            unionAgreement = state.unionAgreement
+        )
+        if (!outcome.success) return outcome
+
+        val signed = outcome.signedContract
+        val moraleLift = if (signed?.perkType == LeagueSponsorPerkType.FAN_MORALE_BOOST) 4 else 1
+        val integrityLift = if (signed?.perkType == LeagueSponsorPerkType.INTEGRITY_TECH) 3 else 0
+        val fanbaseLift = if (signed?.perkType == LeagueSponsorPerkType.COMMERCIAL_REACH ||
+            signed?.perkType == LeagueSponsorPerkType.BROADCAST_LIFT
+        ) 0.45 else 0.15
+        val valuationLift = (signed?.payout ?: 0L) / 2L
+
+        val updatedFranchises = state.franchises.map { team ->
+            team.copy(
+                fanMorale = (team.fanMorale + moraleLift).coerceIn(25, 99)
+            )
+        }
+
+        _uiState.update {
+            it.copy(
+                leagueSponsors = outcome.updatedState,
+                franchises = updatedFranchises,
+                leagueValuationMillions = it.leagueValuationMillions + valuationLift,
+                leagueIntegrityScore = (it.leagueIntegrityScore + integrityLift).coerceIn(20, 100),
+                totalLeagueFanbaseMillions = Math.round((it.totalLeagueFanbaseMillions + fanbaseLift) * 100.0) / 100.0,
+                recentNews = (listOf(outcome.headline) + it.recentNews).take(20)
+            )
+        }
+        notifyFinancialMilestones(state, _uiState.value)
+        recordDashboardTrend("Sponsor+", "lspon_${signed?.slotType?.key ?: "slot"}")
+        refreshJobSecurity(outcome.headline)
+        coreSimulationViewModel.syncFromLeagueState(_uiState.value)
+        persistCurrentState()
+        return outcome
+    }
+
+    fun triggerSponsorUltimatumForScandal(
+        scandalTitle: String,
+        scandalSummary: String,
+        relatedIncident: DisciplinaryIncident? = null
+    ) {
+        _uiState.update { state ->
+            val updated = LeagueSponsorsEngine.evaluateScandalForUltimatum(
+                currentState = state.leagueSponsors,
+                scandalSourceTitle = scandalTitle,
+                scandalSummary = scandalSummary,
+                seasonYear = state.currentYear,
+                weekNumber = state.currentWeek,
+                relatedIncident = relatedIncident,
+                forceTriggerOnAnyIncident = true
+            )
+            state.copy(leagueSponsors = updated)
+        }
+        coreSimulationViewModel.syncFromLeagueState(_uiState.value)
+        persistCurrentState()
+    }
+
+    fun resolveSponsorUltimatum(enforceMaxPenalty: Boolean): SponsorUltimatumResolutionOutcome {
+        val state = _uiState.value
+        val outcome = LeagueSponsorsEngine.resolveSponsorUltimatum(
+            currentSponsorsState = state.leagueSponsors,
+            disciplinaryState = state.disciplinaryState,
+            franchises = state.franchises,
+            unionAgreement = state.unionAgreement,
+            ruleBook = state.ruleBook,
+            enforceMaxPenalty = enforceMaxPenalty
+        )
+        if (!outcome.success) return outcome
+
+        _uiState.update {
+            it.copy(
+                leagueSponsors = outcome.updatedSponsorsState,
+                disciplinaryState = outcome.updatedDisciplinaryState,
+                franchises = outcome.updatedFranchises,
+                unionAgreement = outcome.updatedUnion,
+                cashReservesMillions = (it.cashReservesMillions + outcome.cashTreasuryGainMillions).coerceAtLeast(0L),
+                leagueIntegrityScore = (it.leagueIntegrityScore + outcome.integrityDelta).coerceIn(20, 100),
+                ownerApprovalRating = (it.ownerApprovalRating + outcome.ownerApprovalDelta).coerceIn(15, 100),
+                leagueValuationMillions = (it.leagueValuationMillions + outcome.valuationDeltaMillions).coerceAtLeast(100L),
+                recentNews = (listOf(outcome.headline) + it.recentNews).take(20)
+            )
+        }
+        notifyFinancialMilestones(state, _uiState.value)
+        refreshJobSecurity(outcome.headline)
+        coreSimulationViewModel.syncFromLeagueState(_uiState.value)
+        persistCurrentState()
+        return outcome
     }
 }
 

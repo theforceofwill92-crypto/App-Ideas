@@ -68,7 +68,9 @@ class StadiumNamingRightsAndFacilitiesTest {
             franchise = chicago,
             seasonYear = 2026
         )
-        assertEquals(3, under500Offers.size)
+        assertEquals(6, under500Offers.size)
+        assertTrue(under500Offers.groupBy { it.tier }.values.all { it.size <= 2 })
+        assertEquals(6, under500Offers.map { it.sponsorName }.toSet().size)
         val t1 = under500Offers.first { it.tier == 1 }
         val t2Locked = under500Offers.first { it.tier == 2 }
         val t3 = under500Offers.first { it.tier == 3 }
@@ -294,7 +296,8 @@ class StadiumNamingRightsAndFacilitiesTest {
         val loadedDealState = repo.loadStadiumDealState()
         assertNotNull(loadedDealState)
         assertEquals("NovaVault Crypto", loadedDealState!!.activeBankruptcyScandal!!.bankruptSponsorName)
-        assertEquals(3, loadedDealState.activeNamingRightsOffer!!.offers.size)
+        assertEquals(6, loadedDealState.activeNamingRightsOffer!!.offers.size)
+        assertTrue(loadedDealState.activeNamingRightsOffer!!.offers.groupBy { it.tier }.values.all { it.size <= 2 })
 
         // Compose UI test: Scandal Modal -> Pick Replacement -> Naming Rights Modal -> Select Tier 2 -> Sign
         val app = ApplicationProvider.getApplicationContext<Application>()

@@ -42,6 +42,7 @@ import com.example.ui.components.DashboardSnackbarEffect
 import com.example.ui.components.DashboardSnackbarHost
 import com.example.ui.components.RechartsDualTrendLineChart
 import com.example.ui.components.RechartsExecutiveTrendsChart
+import com.example.ui.components.RechartsFiveYearBroadcastContractsChart
 import com.example.ui.components.RechartsFiveYearRevenueChart
 import com.example.ui.theme.*
 import com.example.viewmodel.LeagueUiState
@@ -120,7 +121,8 @@ fun MainDashboardScreen(
                     onOpenSchedule = { viewModel.openScheduleCalendarScreen(true) },
                     onOpenOffSeason = { viewModel.openOffSeasonSummit(true) },
                     onOpenCrisisHub = { viewModel.openCrisisEventsScreen(true) },
-                    onOpenRivalWatch = { viewModel.openRivalWatchModal(true) }
+                    onOpenRivalWatch = { viewModel.openRivalWatchModal(true) },
+                    onOpenLeagueSponsors = { viewModel.openLeagueSponsorsScreen(true) }
                 )
             }
         }
@@ -234,6 +236,7 @@ fun MainDashboardMetricsPanel(
     onOpenOffSeason: (() -> Unit)? = null,
     onOpenCrisisHub: (() -> Unit)? = null,
     onOpenRivalWatch: (() -> Unit)? = null,
+    onOpenLeagueSponsors: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val avgMorale = if (uiState.franchises.isNotEmpty()) {
@@ -403,11 +406,17 @@ fun MainDashboardMetricsPanel(
             }
 
             // Core League Overview Row (Total Revenue, Active Franchises, Active Labor Union Status)
-            val liveRevenueProjection = remember(uiState.franchises, uiState.activeBroadcast, uiState.unionAgreement) {
+            val liveRevenueProjection = remember(
+                uiState.franchises,
+                uiState.activeBroadcast,
+                uiState.unionAgreement,
+                uiState.leagueSponsors
+            ) {
                 LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
                     franchises = uiState.franchises,
                     activeBroadcast = uiState.activeBroadcast,
-                    unionAgreement = uiState.unionAgreement
+                    unionAgreement = uiState.unionAgreement,
+                    leagueSponsors = uiState.leagueSponsors
                 )
             }
             val totalRevenueM = persistedLeagueState?.totalRevenueMillions
@@ -479,7 +488,8 @@ fun MainDashboardMetricsPanel(
                 onOpenCrisis = onOpenCrisisHub ?: onIntegrityClick ?: onSeasonWeekClick,
                 onOpenSchedule = onOpenSchedule ?: onSeasonWeekClick,
                 onOpenOffSeason = onOpenOffSeason ?: onSeasonWeekClick,
-                onOpenRivalWatch = onOpenRivalWatch ?: onSeasonWeekClick
+                onOpenRivalWatch = onOpenRivalWatch ?: onSeasonWeekClick,
+                onOpenLeagueSponsors = onOpenLeagueSponsors ?: onBankBalanceClick
             )
 
             JobSecurityLegacyStripCard(
@@ -490,6 +500,16 @@ fun MainDashboardMetricsPanel(
             // 5-Year Room Database League Revenue Growth Line Chart
             RechartsFiveYearRevenueChart(
                 records = fiveYearRevenueHistory,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // 5-Season Franchise Broadcast Contracts Chart (Television & Streaming)
+            RechartsFiveYearBroadcastContractsChart(
+                franchises = uiState.franchises,
+                records = fiveYearRevenueHistory,
+                activeBroadcast = uiState.activeBroadcast,
+                currentYear = uiState.currentYear,
+                managedFranchiseId = uiState.managedFranchiseId,
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -527,7 +547,8 @@ private fun UpcomingKeyDecisionsCard(
     onOpenCrisis: () -> Unit,
     onOpenSchedule: () -> Unit,
     onOpenOffSeason: () -> Unit,
-    onOpenRivalWatch: () -> Unit
+    onOpenRivalWatch: () -> Unit,
+    onOpenLeagueSponsors: () -> Unit
 ) {
     val decisions = buildList {
         if (uiState.unionAgreement.isLockoutActive) {
@@ -566,6 +587,19 @@ private fun UpcomingKeyDecisionsCard(
                     accent = AmberWarning,
                     actionLabel = "Review",
                     onClick = onOpenFacilities
+                )
+            )
+        }
+        uiState.leagueSponsors.activeUltimatum?.let { sponUlt ->
+            add(
+                UpcomingDecisionSpec(
+                    key = "sponsor_ultimatum",
+                    badge = "ULTIMATUM",
+                    title = "Sponsor Ultimatum: ${sponUlt.sponsorName}",
+                    detail = "\$${sponUlt.sponsorPayoutMillions}M/yr ${sponUlt.slotType.displayName} deal demands max ${sponUlt.requiredMaxSuspensionGames}G / \$${sponUlt.requiredMaxFineThousands}K.",
+                    accent = CrimsonAlert,
+                    actionLabel = "Resolve",
+                    onClick = onOpenLeagueSponsors
                 )
             )
         }

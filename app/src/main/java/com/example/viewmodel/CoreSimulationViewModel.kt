@@ -366,7 +366,8 @@ class CoreSimulationViewModel : ViewModel() {
             rivalryTicketBonusMillions = rivalryTicketBonusMillions,
             fanGrowthBonusPct = fanGrowthBonusPct,
             facilityValuationGainMillions = facilityValuationGainMillions,
-            specialEventBonusMillions = specialEventBonusMillions
+            specialEventBonusMillions = specialEventBonusMillions,
+            leagueSponsors = state.leagueSponsors
         )
         val newCash = (state.cashReservesMillions + breakdown.netCashFlowMillions).coerceAtLeast(0L)
         val newValuation = (state.leagueValuationMillions + breakdown.valuationDeltaMillions).coerceAtLeast(100L)
@@ -537,9 +538,20 @@ class CoreSimulationViewModel : ViewModel() {
         }
 
         var overlaySession: LaborNegotiationOverlaySession? = null
+        if (candidateEvent == null && state.seasonPhase == SeasonPhase.REGULAR_SEASON) {
+            val disputeRoll = LaborDisputeEngine.maybeGenerateRandomContractDispute(
+                state = state.copy(unionAgreement = union),
+                triggerHistory = _simulationState.value.laborTriggerHistory
+            )
+            if (disputeRoll != null) {
+                candidateEvent = disputeRoll.trigger
+                overlaySession = disputeRoll.overlaySession
+            }
+        }
+
         if (candidateEvent != null) {
             headlines.add("LABOR TRIGGER [${candidateEvent.severity.label}]: ${candidateEvent.title}")
-            if (candidateEvent.autoPromptNegotiation) {
+            if (candidateEvent.autoPromptNegotiation && overlaySession == null) {
                 overlaySession = buildLaborNegotiationOverlay(candidateEvent, state.copy(unionAgreement = union))
             }
             _simulationState.update { sim ->
@@ -577,6 +589,43 @@ class CoreSimulationViewModel : ViewModel() {
         )
     }
 
+    fun triggerRandomContractDispute(
+        state: LeagueUiState,
+        seed: Long? = null
+    ): LaborDisputeEngine.RandomDisputeRoll {
+        val roll = LaborDisputeEngine.maybeGenerateRandomContractDispute(
+            state = state,
+            triggerHistory = _simulationState.value.laborTriggerHistory,
+            seed = seed,
+            forceTrigger = true
+        )!!
+        _simulationState.update { sim ->
+            sim.copy(
+                activeLaborTrigger = roll.trigger,
+                activeLaborNegotiationOverlay = roll.overlaySession,
+                laborTriggerHistory = (listOf(roll.trigger) + sim.laborTriggerHistory).take(30)
+            )
+        }
+        _laborUnionEvents.tryEmit(roll.trigger)
+        if (emittedLaborTriggerIds.add(roll.trigger.id)) {
+            emitDashboardSnackbar(
+                DashboardSnackbarEvent(
+                    id = "snack_${roll.trigger.id}",
+                    type = DashboardAlertType.LABOR_DISPUTE,
+                    severity = when (roll.trigger.severity) {
+                        LaborTriggerSeverity.CRITICAL -> DashboardAlertSeverity.CRITICAL
+                        LaborTriggerSeverity.WARNING -> DashboardAlertSeverity.WARNING
+                        LaborTriggerSeverity.INFO -> DashboardAlertSeverity.INFO
+                    },
+                    message = "Contract Dispute: ${roll.trigger.title}",
+                    actionLabel = "Negotiate",
+                    targetRoute = DashboardSnackbarRoute.LABOR_UNION
+                )
+            )
+        }
+        return roll
+    }
+
     fun acknowledgeLaborTrigger() {
         _simulationState.update { it.copy(activeLaborTrigger = null) }
         _standaloneLeagueState.update { it.copy(activeLaborTrigger = null) }
@@ -591,6 +640,19 @@ class CoreSimulationViewModel : ViewModel() {
         trigger: LaborUnionTriggerEvent?,
         state: LeagueUiState
     ): LaborNegotiationOverlaySession {
+        if (trigger?.type == LaborTriggerType.CONTRACT_DISPUTE_RANDOM) {
+            return LaborDisputeEngine.maybeGenerateRandomContractDispute(
+                state = state,
+                triggerHistory = emptyList(),
+                seed = trigger.id.hashCode().toLong(),
+                forceTrigger = true
+            )!!.overlaySession.copy(
+                id = "overlay_${trigger.id}",
+                headline = trigger.title,
+                subheadline = trigger.description
+            )
+        }
+        val avgTeamMorale = if (state.franchises.isNotEmpty()) state.franchises.map { it.teamMorale }.average().toInt() else 78
         val avgMorale = if (state.franchises.isNotEmpty()) state.franchises.map { it.fanMorale }.average() else 75.0
         val avgLoyalty = if (state.franchises.isNotEmpty()) state.franchises.map { it.fanLoyalty }.average() else 75.0
         val fanSentimentPct = ((avgMorale * 0.55) + (avgLoyalty * 0.45)).toInt().coerceIn(0, 100)
@@ -610,6 +672,11 @@ class CoreSimulationViewModel : ViewModel() {
         }
 
         val (repName, repTitle, repQuote) = when (triggerType) {
+            LaborTriggerType.CONTRACT_DISPUTE_RANDOM -> Triple(
+                "Marcus Vance",
+                "PA Bargaining Committee",
+                "Players demand fair cap growth and wage structure predictability to keep team locker-room morale steady."
+            )
             LaborTriggerType.LOCKOUT_ACTIVE -> Triple(
                 "Marcus Vance & Devon Brooks",
                 "PA Emergency Bargaining Committee",
@@ -640,6 +707,7 @@ class CoreSimulationViewModel : ViewModel() {
         }
 
         val headline = trigger?.title ?: when (triggerType) {
+            LaborTriggerType.CONTRACT_DISPUTE_RANDOM -> "PA CONTRACT DISPUTE — SALARY STRUCTURE TALKS"
             LaborTriggerType.LOCKOUT_ACTIVE -> "LEAGUE LOCKOUT CRISIS — EMERGENCY ACCORD"
             LaborTriggerType.CBA_EXPIRED -> "CBA TABLE DEADLOCK — RENEWAL DECISION"
             LaborTriggerType.WORK_STOPPAGE_ALERT -> "IMMINENT WORK STOPPAGE SHOWDOWN"
@@ -898,6 +966,11 @@ class CoreSimulationViewModel : ViewModel() {
                     projectedStrikeRiskDelta = 10
                 )
             )
+            LaborTriggerType.CONTRACT_DISPUTE_RANDOM -> LaborDisputeEngine.maybeGenerateRandomContractDispute(
+                state = state,
+                triggerHistory = emptyList(),
+                forceTrigger = true
+            )!!.overlaySession.choices
         }
 
         return LaborNegotiationOverlaySession(
@@ -912,7 +985,9 @@ class CoreSimulationViewModel : ViewModel() {
             currentCashMillions = state.cashReservesMillions,
             currentFanSentimentPct = fanSentimentPct,
             currentStrikeRiskPct = state.unionAgreement.strikeRisk,
-            choices = choices
+            choices = choices,
+            currentTeamMoralePct = avgTeamMorale,
+            disputeScenarioId = trigger?.disputeScenarioId
         )
     }
 
@@ -923,6 +998,7 @@ class CoreSimulationViewModel : ViewModel() {
     ): LaborUnionTriggerEvent? {
         val current = _simulationState.value.activeLaborTrigger ?: return null
         val resolved = when (current.type) {
+            LaborTriggerType.CONTRACT_DISPUTE_RANDOM -> true
             LaborTriggerType.LOCKOUT_ACTIVE -> !updatedAgreement.isLockoutActive && updatedAgreement.cbaYearsRemaining >= 1
             LaborTriggerType.CBA_EXPIRED,
             LaborTriggerType.CBA_EXPIRING_SOON -> !updatedAgreement.isLockoutActive && updatedAgreement.cbaYearsRemaining >= 2
@@ -1576,13 +1652,34 @@ class CoreSimulationViewModel : ViewModel() {
                 currentState = acc,
                 franchise = rebuilt,
                 seasonYear = resultState.currentYear,
-                triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT
+                triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
+                allFranchises = resultState.franchises
+            )
+        }
+        var postScandalLeagueSponsors = disciplinaryTick.newIncidents.fold(resultState.leagueSponsors) { acc, incident ->
+            LeagueSponsorsEngine.evaluateScandalForUltimatum(
+                currentState = acc,
+                scandalSourceTitle = "${incident.playerName} • ${incident.incidentTitle}",
+                scandalSummary = incident.incidentSummary,
+                seasonYear = resultState.currentYear,
+                weekNumber = week,
+                relatedIncident = incident
+            )
+        }
+        if (triggeredDilemma != null) {
+            postScandalLeagueSponsors = LeagueSponsorsEngine.evaluateScandalForUltimatum(
+                currentState = postScandalLeagueSponsors,
+                scandalSourceTitle = triggeredDilemma.title,
+                scandalSummary = triggeredDilemma.description,
+                seasonYear = resultState.currentYear,
+                weekNumber = week
             )
         }
         resultState = resultState.copy(
             crisisState = updatedCrisisState,
             activeDilemma = triggeredDilemma,
-            stadiumDealState = postRebuildStadiumState
+            stadiumDealState = postRebuildStadiumState,
+            leagueSponsors = postScandalLeagueSponsors
         )
 
         val triggerEval = evaluateLaborUnionTriggers(
@@ -1744,7 +1841,8 @@ class CoreSimulationViewModel : ViewModel() {
                 currentState = acc,
                 franchise = rebuilt,
                 seasonYear = state.currentYear,
-                triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT
+                triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
+                allFranchises = adjustedFranchises
             )
         }
         val nextState = state.copy(
@@ -1968,7 +2066,8 @@ class CoreSimulationViewModel : ViewModel() {
             val annualRevProjection = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
                 franchises = updatedFranchises,
                 activeBroadcast = state.activeBroadcast,
-                unionAgreement = state.unionAgreement
+                unionAgreement = state.unionAgreement,
+                leagueSponsors = state.leagueSponsors
             )
             val newHistory = LeagueValuationHistory(
                 year = state.currentYear,
@@ -2043,7 +2142,8 @@ class CoreSimulationViewModel : ViewModel() {
                     currentState = acc,
                     franchise = rebuilt,
                     seasonYear = state.currentYear,
-                    triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT
+                    triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
+                    allFranchises = stadiumCheckRaw.updatedFranchises
                 )
             }
             val stadiumCheck = stadiumCheckRaw.copy(updatedStadiumDealState = stadiumDealAfterRebuilds)
@@ -2209,7 +2309,18 @@ class CoreSimulationViewModel : ViewModel() {
                     currentState = acc,
                     franchise = rebuilt,
                     seasonYear = state.currentYear,
-                    triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT
+                    triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
+                    allFranchises = playoffDisciplinary.updatedFranchises
+                )
+            }
+            val playoffRoundSponsors = playoffDisciplinary.newIncidents.fold(state.leagueSponsors) { acc, incident ->
+                LeagueSponsorsEngine.evaluateScandalForUltimatum(
+                    currentState = acc,
+                    scandalSourceTitle = "${incident.playerName} • ${incident.incidentTitle}",
+                    scandalSummary = incident.incidentSummary,
+                    seasonYear = state.currentYear,
+                    weekNumber = state.currentWeek,
+                    relatedIncident = incident
                 )
             }
             val preTrendRoundState = state.copy(
@@ -2218,6 +2329,7 @@ class CoreSimulationViewModel : ViewModel() {
                 disciplinaryState = playoffDisciplinary.updatedState,
                 officiatingState = playoffOfficiating.updatedState,
                 stadiumDealState = playoffRoundStadiumState,
+                leagueSponsors = playoffRoundSponsors,
                 leagueIntegrityScore = (state.leagueIntegrityScore + playoffOfficiating.integrityDelta).coerceIn(20, 100),
                 minorLeagueState = minorPoRound.minorState,
                 cashReservesMillions = (state.cashReservesMillions + playoffRivalryCashCut - playoffOfficiating.weeklyTechOpsCostMillions).coerceAtLeast(0L),
@@ -2374,11 +2486,14 @@ class CoreSimulationViewModel : ViewModel() {
             state.activeBroadcast.copy(yearsRemaining = state.activeBroadcast.yearsRemaining - 1)
         }
 
-        // Decrement CBA years remaining & scale next season's Salary Cap from annual league revenue (including stadium naming rights)
+        val (rolledLeagueSponsors, sponsorExpiryNews) = LeagueSponsorsEngine.advanceOffseasonContracts(state.leagueSponsors)
+
+        // Decrement CBA years remaining & scale next season's Salary Cap from annual league revenue (including stadium naming rights & league sponsors)
         val capProjection = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
             franchises = state.franchises,
             activeBroadcast = newBroadcastDeal,
-            unionAgreement = state.unionAgreement
+            unionAgreement = state.unionAgreement,
+            leagueSponsors = rolledLeagueSponsors
         )
         val decrementedCbaYears = (state.unionAgreement.cbaYearsRemaining - 1).coerceAtLeast(0)
         val rolledUnionAgreement = state.unionAgreement.copy(
@@ -2496,7 +2611,8 @@ class CoreSimulationViewModel : ViewModel() {
                 seasonYear = state.currentYear,
                 triggerReason = NamingRightsTriggerReason.NEW_STADIUM_BUILT,
                 winsOverride = rec?.first,
-                lossesOverride = rec?.second
+                lossesOverride = rec?.second,
+                allFranchises = stadiumRolloverRaw.updatedFranchises
             )
         }
         val stadiumRolloverCheck = stadiumRolloverRaw.copy(updatedStadiumDealState = stadiumStateAfterRebuilds)
@@ -2556,6 +2672,7 @@ class CoreSimulationViewModel : ViewModel() {
             freeAgentPool = offseasonRivalCheck.updatedFreeAgentPool,
             rivalLeague = offseasonRivalCheck.updatedRivalLeague,
             stadiumDealState = stadiumRolloverCheck.updatedStadiumDealState,
+            leagueSponsors = rolledLeagueSponsors,
             unionAgreement = rolledUnionAgreement,
             officiatingState = rolledOfficiatingState,
             leagueValuationMillions = state.leagueValuationMillions + offSeasonFacilityTick.totalLeagueValuationGainMillions + facilityAppreciationDelta,

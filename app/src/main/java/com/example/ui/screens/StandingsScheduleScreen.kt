@@ -1,7 +1,10 @@
 package com.example.ui.screens
 
+import android.app.Application
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -10,16 +13,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.Conference
 import com.example.model.Division
 import com.example.model.Franchise
@@ -34,13 +41,32 @@ import com.example.ui.theme.GoldPrimary
 import com.example.ui.theme.RoyalBlueAccent
 import com.example.viewmodel.LeagueUiState
 import com.example.viewmodel.LeagueViewModel
+import com.example.viewmodel.StandingsSortMode
+import com.example.viewmodel.StandingsViewModel
 
 @Composable
 fun StandingsScheduleScreen(
     uiState: LeagueUiState,
     viewModel: LeagueViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    standingsViewModel: StandingsViewModel? = null
 ) {
+    val context = LocalContext.current
+    val effectiveStandingsVm = standingsViewModel ?: remember(context.applicationContext) {
+        StandingsViewModel(context.applicationContext as Application)
+    }
+
+    LaunchedEffect(uiState.franchises, uiState.currentYear, uiState.currentWeek) {
+        effectiveStandingsVm.syncStandingsFromFranchises(
+            franchises = uiState.franchises,
+            seasonYear = uiState.currentYear,
+            currentWeek = uiState.currentWeek
+        )
+    }
+
+    val roomStandings by effectiveStandingsVm.liveStandings.collectAsStateWithLifecycle()
+    val sortMode by effectiveStandingsVm.sortMode.collectAsStateWithLifecycle()
+
     var standingsViewMode by remember { mutableStateOf(0) } // 0: Overall, 1: By Conference, 2: By Division
 
     val playoffRules = uiState.ruleBook.playoffRules
@@ -51,11 +77,35 @@ fun StandingsScheduleScreen(
         playoffSeeds.filter { it.hasBye }.map { it.franchise }
     }
 
-    val sortedTeams = remember(uiState.franchises) {
-        uiState.franchises.sortedWith(
-            compareByDescending<Franchise> { it.winPct }
-                .thenByDescending { it.pointsFor - it.pointsAgainst }
-        )
+    val sortedTeams = remember(uiState.franchises, roomStandings, sortMode) {
+        val franchiseMap = uiState.franchises.associateBy { it.id }
+        val roomOrdered = roomStandings.mapNotNull { standing ->
+            franchiseMap[standing.franchiseId]?.copy(
+                wins = standing.wins,
+                losses = standing.losses,
+                pointsFor = standing.pointsFor,
+                pointsAgainst = standing.pointsAgainst
+            )
+        }
+        if (roomOrdered.size == uiState.franchises.size && roomOrdered.isNotEmpty()) {
+            roomOrdered
+        } else {
+            when (sortMode) {
+                StandingsSortMode.WIN_PCT -> uiState.franchises.sortedWith(
+                    compareByDescending<Franchise> { it.winPct }
+                        .thenByDescending { it.pointsFor - it.pointsAgainst }
+                        .thenByDescending { it.wins }
+                )
+                StandingsSortMode.POINT_DIFF -> uiState.franchises.sortedWith(
+                    compareByDescending<Franchise> { it.pointsFor - it.pointsAgainst }
+                        .thenByDescending { it.winPct }
+                )
+                StandingsSortMode.WINS -> uiState.franchises.sortedWith(
+                    compareByDescending<Franchise> { it.wins }
+                        .thenByDescending { it.pointsFor - it.pointsAgainst }
+                )
+            }
+        }
     }
 
     LazyColumn(
@@ -118,6 +168,107 @@ fun StandingsScheduleScreen(
                 )
             }
             Spacer(modifier = Modifier.height(10.dp))
+
+            // Room DB Live League Standings Summary & Sort Controls
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("standings_room_summary_card")
+                    .border(1.dp, CyanAccent.copy(alpha = 0.45f), RoundedCornerShape(14.dp)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Leaderboard,
+                                contentDescription = "Live Room Standings Table",
+                                tint = CyanAccent,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "LIVE LEAGUE STANDINGS • ROOM DB",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = CyanAccent,
+                                letterSpacing = 0.7.sp
+                            )
+                        }
+                        Surface(
+                            color = EmeraldAccent.copy(alpha = 0.16f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "${roomStandings.size.coerceAtLeast(sortedTeams.size)} Clubs • Y${uiState.currentYear}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = EmeraldAccent,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+
+                    val topLeader = roomStandings.firstOrNull()
+                    if (topLeader != null) {
+                        val leaderDiff = topLeader.pointDifferential
+                        val leaderDiffStr = if (leaderDiff >= 0) "+$leaderDiff" else "$leaderDiff"
+                        Text(
+                            text = "League Leader: ${topLeader.teamFullName} (${topLeader.wins}-${topLeader.losses}, Diff $leaderDiffStr)",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        StandingsSortMode.entries.forEach { mode ->
+                            val selected = sortMode == mode
+                            Surface(
+                                color = if (selected) GoldPrimary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surface,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) GoldPrimary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { effectiveStandingsVm.setSortMode(mode) }
+                                    .testTag("standings_sort_${mode.name}")
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = mode.label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (selected) FontWeight.Black else FontWeight.SemiBold,
+                                        color = if (selected) GoldPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
         }
 
         // Reigning Champion Banner if Season Completed
@@ -600,12 +751,15 @@ private fun StandingRowCard(
                     text = "${team.wins} - ${team.losses}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Black,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.testTag("standing_record_${team.id}")
                 )
                 Text(
-                    text = "${subtitlePrefix}${String.format("%.3f", team.winPct)} • Diff: $diffFormatted",
+                    text = "${subtitlePrefix}${String.format("%.3f", team.winPct)} • PF ${team.pointsFor}/PA ${team.pointsAgainst} • Diff: $diffFormatted",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (diff >= 0) EmeraldAccent else CrimsonAlert,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.testTag("standing_diff_${team.id}")
                 )
             }
         }

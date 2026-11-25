@@ -69,6 +69,29 @@ data class LeagueRevenueHistoryEntity(
     val valuationMillions: Long,
     val franchiseCount: Int,
     val championName: String,
+    val updatedTimestamp: Long = System.currentTimeMillis(),
+    val tvBroadcastRevenueMillions: Long = 0L,
+    val streamingBroadcastRevenueMillions: Long = 0L
+)
+
+@Entity(tableName = "league_standings")
+data class LeagueStandingEntity(
+    @PrimaryKey val franchiseId: String,
+    val cityName: String,
+    val nickname: String,
+    val teamFullName: String,
+    val conferenceName: String,
+    val divisionName: String,
+    val colorHex: Long,
+    val secondaryColorHex: Long,
+    val wins: Int,
+    val losses: Int,
+    val pointsFor: Int,
+    val pointsAgainst: Int,
+    val pointDifferential: Int,
+    val winPct: Double,
+    val seasonYear: Int,
+    val currentWeek: Int,
     val updatedTimestamp: Long = System.currentTimeMillis()
 )
 
@@ -120,15 +143,48 @@ interface LeagueRevenueHistoryDao {
     suspend fun clearRevenueHistory()
 }
 
+@Dao
+interface LeagueStandingDao {
+    @Query("SELECT * FROM league_standings ORDER BY winPct DESC, pointDifferential DESC, wins DESC, teamFullName ASC")
+    fun getLiveStandingsFlow(): Flow<List<LeagueStandingEntity>>
+
+    @Query("SELECT * FROM league_standings WHERE conferenceName = :conferenceName ORDER BY winPct DESC, pointDifferential DESC, wins DESC, teamFullName ASC")
+    fun getLiveStandingsByConferenceFlow(conferenceName: String): Flow<List<LeagueStandingEntity>>
+
+    @Query("SELECT * FROM league_standings ORDER BY winPct DESC, pointDifferential DESC, wins DESC, teamFullName ASC")
+    suspend fun getAllStandings(): List<LeagueStandingEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertStanding(standing: LeagueStandingEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAllStandings(standings: List<LeagueStandingEntity>)
+
+    @Query("DELETE FROM league_standings")
+    suspend fun clearStandings()
+
+    @Transaction
+    suspend fun replaceStandings(standings: List<LeagueStandingEntity>) {
+        clearStandings()
+        upsertAllStandings(standings)
+    }
+}
+
 @Database(
-    entities = [LeagueSaveEntity::class, LeagueState::class, LeagueRevenueHistoryEntity::class],
-    version = 3,
+    entities = [
+        LeagueSaveEntity::class,
+        LeagueState::class,
+        LeagueRevenueHistoryEntity::class,
+        LeagueStandingEntity::class
+    ],
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun leagueDao(): LeagueDao
     abstract fun leagueStateDao(): LeagueStateDao
     abstract fun leagueRevenueHistoryDao(): LeagueRevenueHistoryDao
+    abstract fun leagueStandingDao(): LeagueStandingDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -184,6 +240,37 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `league_revenue_history` ADD COLUMN `tvBroadcastRevenueMillions` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `league_revenue_history` ADD COLUMN `streamingBroadcastRevenueMillions` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `league_standings` (
+                        `franchiseId` TEXT NOT NULL,
+                        `cityName` TEXT NOT NULL,
+                        `nickname` TEXT NOT NULL,
+                        `teamFullName` TEXT NOT NULL,
+                        `conferenceName` TEXT NOT NULL,
+                        `divisionName` TEXT NOT NULL,
+                        `colorHex` INTEGER NOT NULL,
+                        `secondaryColorHex` INTEGER NOT NULL,
+                        `wins` INTEGER NOT NULL,
+                        `losses` INTEGER NOT NULL,
+                        `pointsFor` INTEGER NOT NULL,
+                        `pointsAgainst` INTEGER NOT NULL,
+                        `pointDifferential` INTEGER NOT NULL,
+                        `winPct` REAL NOT NULL,
+                        `seasonYear` INTEGER NOT NULL,
+                        `currentWeek` INTEGER NOT NULL,
+                        `updatedTimestamp` INTEGER NOT NULL,
+                        PRIMARY KEY(`franchiseId`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         @Volatile
         private var cachedContext: android.content.Context? = null
 
@@ -206,7 +293,7 @@ abstract class AppDatabase : RoomDatabase() {
                         AppDatabase::class.java,
                         "apex_league_database.db"
                     )
-                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                         .build()
                     cachedContext = appCtx
                     instance = created

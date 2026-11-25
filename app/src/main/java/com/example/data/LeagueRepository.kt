@@ -19,6 +19,7 @@ class LeagueRepository(context: Context) {
     private val dao = db.leagueDao()
     private val leagueStateDao = db.leagueStateDao()
     private val revenueHistoryDao = db.leagueRevenueHistoryDao()
+    private val leagueStandingDao = db.leagueStandingDao()
     private val faPrefs by lazy {
         appContext.getSharedPreferences("apex_free_agency_prefs", Context.MODE_PRIVATE)
     }
@@ -35,6 +36,7 @@ class LeagueRepository(context: Context) {
         revenueHistoryDao.getLastFiveYearsRevenueFlow().map { list ->
             list.sortedBy { it.seasonYear }
         }
+    val liveStandingsFlow: Flow<List<LeagueStandingEntity>> = leagueStandingDao.getLiveStandingsFlow()
 
     suspend fun loadLeague(): LeagueSaveEntity? = withContext(Dispatchers.IO) {
         dao.getLeagueSave()
@@ -60,20 +62,47 @@ class LeagueRepository(context: Context) {
         revenueHistoryDao.upsertAllAnnualRevenues(records)
     }
 
+    fun computeBroadcastTvStreamingSplit(
+        platform: BroadcastPlatform,
+        broadcastTotalMillions: Long,
+        yearsBackFromCurrent: Int = 0
+    ): Pair<Long, Long> {
+        val safeTotal = broadcastTotalMillions.coerceAtLeast(0L)
+        val baseStreamingShare = when (platform) {
+            BroadcastPlatform.GLOBAL_STREAMER -> 0.72
+            BroadcastPlatform.HYBRID_SYNDICATE -> 0.48
+            BroadcastPlatform.LINEAR_CABLE -> 0.30
+            BroadcastPlatform.FREE_TO_AIR -> 0.18
+        }
+        val historicalAdj = (yearsBackFromCurrent * 0.035).coerceIn(0.0, 0.16)
+        val streamingShare = (baseStreamingShare - historicalAdj).coerceIn(0.12, 0.78)
+        val streamingRev = kotlin.math.round(safeTotal * streamingShare).toLong().coerceIn(0L, safeTotal)
+        val tvRev = (safeTotal - streamingRev).coerceAtLeast(0L)
+        return tvRev to streamingRev
+    }
+
     fun buildCurrentYearRevenueRecord(
         currentYear: Int,
         leagueValuationMillions: Long,
         unionAgreement: LaborUnionAgreement,
         activeBroadcast: BroadcastContract,
         franchises: List<Franchise>,
-        championName: String = "In Progress"
+        championName: String = "In Progress",
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
     ): LeagueRevenueHistoryEntity {
         val proj = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
             franchises = franchises,
             activeBroadcast = activeBroadcast,
-            unionAgreement = unionAgreement
+            unionAgreement = unionAgreement,
+            leagueSponsors = leagueSponsors
         )
-        val sponsorAnnual = franchises.sumOf { it.localSponsorRevenueMillions.coerceAtLeast(0L) }
+        val sponsorAnnual = franchises.sumOf { it.localSponsorRevenueMillions.coerceAtLeast(0L) } +
+            leagueSponsors.totalAnnualPayoutMillions
+        val (tvRev, streamRev) = computeBroadcastTvStreamingSplit(
+            platform = activeBroadcast.platform,
+            broadcastTotalMillions = activeBroadcast.annualPayoutMillions,
+            yearsBackFromCurrent = 0
+        )
         return LeagueRevenueHistoryEntity(
             seasonYear = currentYear,
             totalRevenueMillions = proj.annualLeagueRevenueMillions,
@@ -82,8 +111,108 @@ class LeagueRepository(context: Context) {
             namingRightsRevenueMillions = proj.totalNamingRightsRevenueMillions,
             valuationMillions = leagueValuationMillions,
             franchiseCount = franchises.size,
-            championName = championName
+            championName = championName,
+            tvBroadcastRevenueMillions = tvRev,
+            streamingBroadcastRevenueMillions = streamRev
         )
+    }
+
+    fun buildFiveYearRevenueRecords(
+        currentYear: Int,
+        leagueValuationMillions: Long,
+        unionAgreement: LaborUnionAgreement,
+        activeBroadcast: BroadcastContract,
+        franchises: List<Franchise>,
+        history: List<LeagueValuationHistory>,
+        existingByYear: Map<Int, LeagueRevenueHistoryEntity> = emptyMap(),
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
+    ): List<LeagueRevenueHistoryEntity> {
+        val currentYearRecord = buildCurrentYearRevenueRecord(
+            currentYear = currentYear,
+            leagueValuationMillions = leagueValuationMillions,
+            unionAgreement = unionAgreement,
+            activeBroadcast = activeBroadcast,
+            franchises = franchises,
+            championName = history.firstOrNull { it.year == currentYear }?.championName ?: "In Progress",
+            leagueSponsors = leagueSponsors
+        )
+        val historicalRecords = history.distinctBy { it.year }.mapNotNull { h ->
+            if (h.year == currentYear) {
+                currentYearRecord.copy(
+                    championName = h.championName,
+                    valuationMillions = h.valuationMillions,
+                    totalRevenueMillions = maxOf(h.totalRevenueMillions, currentYearRecord.totalRevenueMillions)
+                )
+            } else {
+                val existing = existingByYear[h.year]
+                val bRev = existing?.broadcastRevenueMillions ?: (h.totalRevenueMillions * 0.42).toLong()
+                val yearsBack = (currentYear - h.year).coerceAtLeast(0)
+                val (defaultTv, defaultStream) = computeBroadcastTvStreamingSplit(
+                    platform = activeBroadcast.platform,
+                    broadcastTotalMillions = bRev,
+                    yearsBackFromCurrent = yearsBack
+                )
+                LeagueRevenueHistoryEntity(
+                    seasonYear = h.year,
+                    totalRevenueMillions = h.totalRevenueMillions,
+                    broadcastRevenueMillions = bRev,
+                    sponsorRevenueMillions = existing?.sponsorRevenueMillions ?: (h.totalRevenueMillions * 0.48).toLong(),
+                    namingRightsRevenueMillions = existing?.namingRightsRevenueMillions ?: (h.totalRevenueMillions * 0.10).toLong(),
+                    valuationMillions = h.valuationMillions,
+                    franchiseCount = existing?.franchiseCount ?: franchises.size,
+                    championName = h.championName,
+                    tvBroadcastRevenueMillions = existing?.tvBroadcastRevenueMillions?.takeIf { it > 0L } ?: defaultTv,
+                    streamingBroadcastRevenueMillions = existing?.streamingBroadcastRevenueMillions?.takeIf { it > 0L } ?: defaultStream
+                )
+            }
+        }
+        return (historicalRecords + currentYearRecord)
+            .associateBy { it.seasonYear }
+            .values
+            .sortedBy { it.seasonYear }
+            .takeLast(5)
+    }
+
+    fun buildStandingEntities(
+        franchises: List<Franchise>,
+        seasonYear: Int,
+        currentWeek: Int
+    ): List<LeagueStandingEntity> = franchises.map { f ->
+        LeagueStandingEntity(
+            franchiseId = f.id,
+            cityName = f.cityName,
+            nickname = f.nickname,
+            teamFullName = f.teamFullName,
+            conferenceName = f.conference.displayName,
+            divisionName = f.division.displayName,
+            colorHex = f.colorHex,
+            secondaryColorHex = f.secondaryColorHex,
+            wins = f.wins,
+            losses = f.losses,
+            pointsFor = f.pointsFor,
+            pointsAgainst = f.pointsAgainst,
+            pointDifferential = f.pointsFor - f.pointsAgainst,
+            winPct = f.winPct,
+            seasonYear = seasonYear,
+            currentWeek = currentWeek
+        )
+    }.sortedWith(
+        compareByDescending<LeagueStandingEntity> { it.winPct }
+            .thenByDescending { it.pointDifferential }
+            .thenByDescending { it.wins }
+            .thenBy { it.teamFullName }
+    )
+
+    suspend fun syncLiveStandings(
+        franchises: List<Franchise>,
+        seasonYear: Int,
+        currentWeek: Int
+    ) = withContext(Dispatchers.IO) {
+        leagueStandingDao.replaceStandings(buildStandingEntities(franchises, seasonYear, currentWeek))
+    }
+
+    suspend fun loadLiveStandings(): List<LeagueStandingEntity> = withContext(Dispatchers.IO) {
+        leagueStandingDao.getAllStandings()
     }
 
     fun buildLeagueStateSnapshot(
@@ -95,14 +224,17 @@ class LeagueRepository(context: Context) {
         leagueValuationMillions: Long,
         unionAgreement: LaborUnionAgreement,
         activeBroadcast: BroadcastContract,
-        franchises: List<Franchise>
+        franchises: List<Franchise>,
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
     ): LeagueState {
         val revenueProjection = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
             franchises = franchises,
             activeBroadcast = activeBroadcast,
-            unionAgreement = unionAgreement
+            unionAgreement = unionAgreement,
+            leagueSponsors = leagueSponsors
         )
-        val sponsorAnnual = franchises.sumOf { it.localSponsorRevenueMillions.coerceAtLeast(0L) }
+        val sponsorAnnual = franchises.sumOf { it.localSponsorRevenueMillions.coerceAtLeast(0L) } +
+            leagueSponsors.totalAnnualPayoutMillions
         val isUnionActive = !unionAgreement.isLockoutActive
         val unionStatus = when {
             unionAgreement.isLockoutActive -> "Owner Lockout Active"
@@ -153,7 +285,8 @@ class LeagueRepository(context: Context) {
         newsFeed: List<String>,
         freeAgentPool: List<FreeAgentPlayer>? = null,
         freeAgentSignings: List<FreeAgentSigningTransaction>? = null,
-        ruleBook: LeagueRuleBook? = null
+        ruleBook: LeagueRuleBook? = null,
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
     ) = withContext(Dispatchers.IO) {
         val entity = LeagueSaveEntity(
             id = 1,
@@ -192,44 +325,22 @@ class LeagueRepository(context: Context) {
             leagueValuationMillions = leagueValuationMillions,
             unionAgreement = unionAgreement,
             activeBroadcast = activeBroadcast,
-            franchises = franchises
+            franchises = franchises,
+            leagueSponsors = leagueSponsors
         )
         leagueStateDao.upsertLeagueState(leagueState)
-        val currentYearRecord = buildCurrentYearRevenueRecord(
+        val recordsToPersist = buildFiveYearRevenueRecords(
             currentYear = currentYear,
             leagueValuationMillions = leagueValuationMillions,
             unionAgreement = unionAgreement,
             activeBroadcast = activeBroadcast,
             franchises = franchises,
-            championName = history.firstOrNull { it.year == currentYear }?.championName ?: "In Progress"
+            history = history,
+            existingByYear = revenueHistoryDao.getLastFiveYearsRevenue().associateBy { it.seasonYear },
+            leagueSponsors = leagueSponsors
         )
-        val existingByYear = revenueHistoryDao.getLastFiveYearsRevenue().associateBy { it.seasonYear }
-        val historicalRecords = history.distinctBy { it.year }.mapNotNull { h ->
-            if (h.year == currentYear) {
-                currentYearRecord.copy(
-                    championName = h.championName,
-                    valuationMillions = h.valuationMillions,
-                    totalRevenueMillions = maxOf(h.totalRevenueMillions, currentYearRecord.totalRevenueMillions)
-                )
-            } else {
-                val existing = existingByYear[h.year]
-                LeagueRevenueHistoryEntity(
-                    seasonYear = h.year,
-                    totalRevenueMillions = h.totalRevenueMillions,
-                    broadcastRevenueMillions = existing?.broadcastRevenueMillions ?: (h.totalRevenueMillions * 0.42).toLong(),
-                    sponsorRevenueMillions = existing?.sponsorRevenueMillions ?: (h.totalRevenueMillions * 0.48).toLong(),
-                    namingRightsRevenueMillions = existing?.namingRightsRevenueMillions ?: (h.totalRevenueMillions * 0.10).toLong(),
-                    valuationMillions = h.valuationMillions,
-                    franchiseCount = existing?.franchiseCount ?: franchises.size,
-                    championName = h.championName
-                )
-            }
-        }
-        val recordsToPersist = (historicalRecords + currentYearRecord)
-            .associateBy { it.seasonYear }
-            .values
-            .sortedBy { it.seasonYear }
         revenueHistoryDao.upsertAllAnnualRevenues(recordsToPersist)
+        leagueStandingDao.replaceStandings(buildStandingEntities(franchises, currentYear, currentWeek))
         if (freeAgentPool != null || freeAgentSignings != null) {
             saveFreeAgencyState(
                 pool = freeAgentPool ?: emptyList(),
@@ -251,6 +362,7 @@ class LeagueRepository(context: Context) {
         dao.deleteLeagueSave()
         leagueStateDao.deleteLeagueState()
         revenueHistoryDao.clearRevenueHistory()
+        leagueStandingDao.clearStandings()
         clearPrefsSync()
     }
 
@@ -1230,6 +1342,7 @@ class LeagueRepository(context: Context) {
                 put("rosterRating", f.rosterRating)
                 put("fanBaseMillions", f.fanBaseMillions)
                 put("fanMorale", f.fanMorale)
+                put("teamMorale", f.teamMorale)
                 put("stadiumCapacity", f.stadiumCapacity)
                 put("stadiumAge", f.stadiumAge)
                 put("stadiumCondition", f.stadiumCondition)
@@ -1304,6 +1417,7 @@ class LeagueRepository(context: Context) {
                             put("franchiseId", p.franchiseId)
                             put("position", p.position)
                             put("overallRating", p.overallRating)
+                            put("potentialRating", p.potentialRating)
                             put("age", p.age)
                             put("salaryMillions", p.salaryMillions)
                             put("contractYearsRemaining", p.contractYearsRemaining)
@@ -1448,6 +1562,7 @@ class LeagueRepository(context: Context) {
                     rosterRating = obj.getInt("rosterRating"),
                     fanBaseMillions = obj.getDouble("fanBaseMillions"),
                     fanMorale = obj.getInt("fanMorale"),
+                    teamMorale = obj.optInt("teamMorale", 78).coerceIn(10, 99),
                     stadiumCapacity = obj.getInt("stadiumCapacity"),
                     stadiumAge = obj.optInt("stadiumAge", 14).coerceAtLeast(0),
                     stadiumCondition = obj.optInt("stadiumCondition", 78).coerceIn(0, 100),
@@ -1490,12 +1605,14 @@ class LeagueRepository(context: Context) {
                         if (rosterArray != null && rosterArray.length() > 0) {
                             (0 until rosterArray.length()).mapNotNull { rIdx ->
                                 val pObj = rosterArray.optJSONObject(rIdx) ?: return@mapNotNull null
+                                val ovr = pObj.optInt("overallRating", 75)
                                 RosterPlayer(
                                     id = pObj.optString("id", "player_${fId}_$rIdx"),
                                     name = pObj.optString("name", "Roster Player"),
                                     franchiseId = pObj.optString("franchiseId", fId),
                                     position = pObj.optString("position", "SG"),
-                                    overallRating = pObj.optInt("overallRating", 75),
+                                    overallRating = ovr,
+                                    potentialRating = pObj.optInt("potentialRating", (ovr + 6).coerceIn(ovr, 99)).coerceIn(ovr, 99),
                                     age = pObj.optInt("age", 25),
                                     salaryMillions = pObj.optLong("salaryMillions", 5L),
                                     contractYearsRemaining = pObj.optInt("contractYearsRemaining", 1),
@@ -3238,8 +3355,19 @@ class LeagueRepository(context: Context) {
         val postCareerTransitionFundMillions: Long,
         val fiveStarHotelSingleRooms: Boolean,
         val minPlayerSalaryK: Long,
-        val playerHealthWelfareMillions: Long
+        val playerHealthWelfareMillions: Long,
+        val luxuryTaxThresholdMillions: Long = 102L,
+        val rookieScaleMultiplierPct: Int = 100,
+        val maxContractCapPct: Int = 30
     )
+
+    fun saveManagedFranchiseId(franchiseId: String?) {
+        settingsPrefs.edit().putString("managed_franchise_id", franchiseId ?: "").apply()
+    }
+
+    fun loadManagedFranchiseId(): String? {
+        return settingsPrefs.getString("managed_franchise_id", null)?.takeIf { it.isNotBlank() }
+    }
 
     fun saveLaborCbaExtendedState(union: LaborUnionAgreement) {
         val root = JSONObject().apply {
@@ -3256,6 +3384,9 @@ class LeagueRepository(context: Context) {
             put("fiveStarHotelSingleRooms", union.fiveStarHotelSingleRooms)
             put("minPlayerSalaryK", union.minPlayerSalaryK)
             put("playerHealthWelfareMillions", union.playerHealthWelfareMillions)
+            put("luxuryTaxThresholdMillions", union.luxuryTaxThresholdMillions)
+            put("rookieScaleMultiplierPct", union.rookieScaleMultiplierPct)
+            put("maxContractCapPct", union.maxContractCapPct)
         }
         settingsPrefs.edit().putString("labor_cba_extended_json", root.toString()).apply()
     }
@@ -3278,7 +3409,10 @@ class LeagueRepository(context: Context) {
                 postCareerTransitionFundMillions = o.optLong("postCareerTransitionFundMillions", 5L),
                 fiveStarHotelSingleRooms = o.optBoolean("fiveStarHotelSingleRooms", true),
                 minPlayerSalaryK = o.optLong("minPlayerSalaryK", 650L),
-                playerHealthWelfareMillions = o.optLong("playerHealthWelfareMillions", 15L)
+                playerHealthWelfareMillions = o.optLong("playerHealthWelfareMillions", 15L),
+                luxuryTaxThresholdMillions = o.optLong("luxuryTaxThresholdMillions", 102L),
+                rookieScaleMultiplierPct = o.optInt("rookieScaleMultiplierPct", 100),
+                maxContractCapPct = o.optInt("maxContractCapPct", 30)
             )
         } catch (_: Exception) {
             null
@@ -3365,5 +3499,110 @@ class LeagueRepository(context: Context) {
             baseContract to null
         }
     }
+
+    fun saveLeagueSponsorsState(state: LeagueSponsorsState) {
+        val root = JSONObject().apply {
+            put("lastSummary", state.lastSummary)
+            state.apparel?.let { put("apparel", leagueSponsorContractToJson(it)) }
+            state.beverage?.let { put("beverage", leagueSponsorContractToJson(it)) }
+            state.tech?.let { put("tech", leagueSponsorContractToJson(it)) }
+            state.betting?.let { put("betting", leagueSponsorContractToJson(it)) }
+            state.activeUltimatum?.let { put("activeUltimatum", sponsorUltimatumToJson(it)) }
+            val qArr = JSONArray()
+            state.pendingUltimatumQueue.forEach { qArr.put(sponsorUltimatumToJson(it)) }
+            put("pendingUltimatumQueue", qArr)
+            put("expiredSlotNotices", JSONArray(state.expiredSlotNotices))
+        }
+        settingsPrefs.edit().putString("league_sponsors_state_json", root.toString()).apply()
+    }
+
+    fun loadLeagueSponsorsState(): LeagueSponsorsState? {
+        val raw = settingsPrefs.getString("league_sponsors_state_json", null) ?: return null
+        return try {
+            val root = JSONObject(raw)
+            val qArr = root.optJSONArray("pendingUltimatumQueue") ?: JSONArray()
+            val queue = (0 until qArr.length()).mapNotNull { i ->
+                qArr.optJSONObject(i)?.let { jsonToSponsorUltimatum(it) }
+            }
+            val expArr = root.optJSONArray("expiredSlotNotices") ?: JSONArray()
+            val exp = (0 until expArr.length()).mapNotNull { i -> expArr.optString(i).takeIf { it.isNotBlank() } }
+            LeagueSponsorsState(
+                apparel = root.optJSONObject("apparel")?.let { jsonToLeagueSponsorContract(it, LeagueSponsorSlotType.APPAREL) },
+                beverage = root.optJSONObject("beverage")?.let { jsonToLeagueSponsorContract(it, LeagueSponsorSlotType.BEVERAGE) },
+                tech = root.optJSONObject("tech")?.let { jsonToLeagueSponsorContract(it, LeagueSponsorSlotType.TECH) },
+                betting = root.optJSONObject("betting")?.let { jsonToLeagueSponsorContract(it, LeagueSponsorSlotType.BETTING) },
+                activeUltimatum = root.optJSONObject("activeUltimatum")?.let { jsonToSponsorUltimatum(it) },
+                pendingUltimatumQueue = queue,
+                expiredSlotNotices = exp,
+                lastSummary = root.optString("lastSummary", "4 official league sponsor slots.")
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun leagueSponsorContractToJson(c: LeagueSponsorContract): JSONObject = JSONObject().apply {
+        put("id", c.id)
+        put("slotType", c.slotType.name)
+        put("name", c.name)
+        put("payout", c.payout)
+        put("yearsLeft", c.yearsLeft)
+        put("perkType", c.perkType.name)
+        put("scandalSensitivity", c.scandalSensitivity.name)
+        put("tagline", c.tagline)
+    }
+
+    private fun jsonToLeagueSponsorContract(obj: JSONObject, fallbackSlot: LeagueSponsorSlotType): LeagueSponsorContract =
+        LeagueSponsorContract(
+            id = obj.optString("id"),
+            slotType = runCatching { LeagueSponsorSlotType.valueOf(obj.optString("slotType")) }
+                .getOrDefault(fallbackSlot),
+            name = obj.optString("name"),
+            payout = obj.optLong("payout", 10L),
+            yearsLeft = obj.optInt("yearsLeft", 2),
+            perkType = runCatching { LeagueSponsorPerkType.valueOf(obj.optString("perkType")) }
+                .getOrDefault(LeagueSponsorPerkType.COMMERCIAL_REACH),
+            scandalSensitivity = runCatching { SponsorScandalSensitivity.valueOf(obj.optString("scandalSensitivity")) }
+                .getOrDefault(SponsorScandalSensitivity.MODERATE),
+            tagline = obj.optString("tagline", "")
+        )
+
+    private fun sponsorUltimatumToJson(u: SponsorUltimatumEvent): JSONObject = JSONObject().apply {
+        put("id", u.id)
+        put("slotType", u.slotType.name)
+        put("sponsorName", u.sponsorName)
+        put("sponsorPayoutMillions", u.sponsorPayoutMillions)
+        put("scandalSensitivity", u.scandalSensitivity.name)
+        put("scandalSourceTitle", u.scandalSourceTitle)
+        put("scandalSummary", u.scandalSummary)
+        put("relatedIncidentId", u.relatedIncidentId ?: "")
+        put("relatedPlayerName", u.relatedPlayerName ?: "")
+        put("relatedFranchiseId", u.relatedFranchiseId ?: "")
+        put("relatedFranchiseName", u.relatedFranchiseName ?: "")
+        put("requiredMaxSuspensionGames", u.requiredMaxSuspensionGames)
+        put("requiredMaxFineThousands", u.requiredMaxFineThousands)
+        put("seasonYear", u.seasonYear)
+        put("weekNumber", u.weekNumber)
+    }
+
+    private fun jsonToSponsorUltimatum(obj: JSONObject): SponsorUltimatumEvent = SponsorUltimatumEvent(
+        id = obj.optString("id"),
+        slotType = runCatching { LeagueSponsorSlotType.valueOf(obj.optString("slotType")) }
+            .getOrDefault(LeagueSponsorSlotType.APPAREL),
+        sponsorName = obj.optString("sponsorName"),
+        sponsorPayoutMillions = obj.optLong("sponsorPayoutMillions", 20L),
+        scandalSensitivity = runCatching { SponsorScandalSensitivity.valueOf(obj.optString("scandalSensitivity")) }
+            .getOrDefault(SponsorScandalSensitivity.HIGH),
+        scandalSourceTitle = obj.optString("scandalSourceTitle"),
+        scandalSummary = obj.optString("scandalSummary"),
+        relatedIncidentId = obj.optString("relatedIncidentId").takeIf { it.isNotBlank() },
+        relatedPlayerName = obj.optString("relatedPlayerName").takeIf { it.isNotBlank() },
+        relatedFranchiseId = obj.optString("relatedFranchiseId").takeIf { it.isNotBlank() },
+        relatedFranchiseName = obj.optString("relatedFranchiseName").takeIf { it.isNotBlank() },
+        requiredMaxSuspensionGames = obj.optInt("requiredMaxSuspensionGames", 10),
+        requiredMaxFineThousands = obj.optInt("requiredMaxFineThousands", 250),
+        seasonYear = obj.optInt("seasonYear", 2026),
+        weekNumber = obj.optInt("weekNumber", 1)
+    )
 }
 

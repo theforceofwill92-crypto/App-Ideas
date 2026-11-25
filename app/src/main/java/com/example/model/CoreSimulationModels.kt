@@ -7,7 +7,8 @@ enum class LaborTriggerType(val label: String) {
     WORK_STOPPAGE_ALERT("Imminent Work Stoppage"),
     REVENUE_SHARE_DISPUTE("Revenue Share Dispute"),
     TRAVEL_SAFETY_GRIEVANCE("Travel & Safety Grievance"),
-    LOCKOUT_ACTIVE("Owner Lockout Active — Games Suspended")
+    LOCKOUT_ACTIVE("Owner Lockout Active — Games Suspended"),
+    CONTRACT_DISPUTE_RANDOM("Random Labor Contract Dispute")
 }
 
 enum class LaborTriggerSeverity(val label: String) {
@@ -27,7 +28,8 @@ data class LaborUnionTriggerEvent(
     val week: Int,
     val strikeRiskSnapshot: Int,
     val cbaYearsRemainingSnapshot: Int,
-    val autoPromptNegotiation: Boolean = false
+    val autoPromptNegotiation: Boolean = false,
+    val disputeScenarioId: String? = null
 )
 
 data class WeeklyRevenueBreakdown(
@@ -96,7 +98,12 @@ data class LaborNegotiationChoice(
     val requestedSalaryCapType: SalaryCapType? = null,
     val requestedRosterSizeRule: RosterSizeRule? = null,
     val clearsLockout: Boolean = false,
-    val activatesLockoutOnReject: Boolean = false
+    val activatesLockoutOnReject: Boolean = false,
+    val projectedTeamMoraleDelta: Int = projectedFanMoraleDelta,
+    val requestedLuxuryTaxThresholdDelta: Long = 0L,
+    val requestedRookieScaleDeltaPct: Int = 0,
+    val requestedMaxContractCapDeltaPct: Int = 0,
+    val requestedMinSalaryDeltaK: Long = 0L
 )
 
 data class LaborNegotiationOverlaySession(
@@ -111,7 +118,9 @@ data class LaborNegotiationOverlaySession(
     val currentCashMillions: Long,
     val currentFanSentimentPct: Int,
     val currentStrikeRiskPct: Int,
-    val choices: List<LaborNegotiationChoice>
+    val choices: List<LaborNegotiationChoice>,
+    val currentTeamMoralePct: Int = 78,
+    val disputeScenarioId: String? = null
 )
 
 data class DashboardTrendPoint(

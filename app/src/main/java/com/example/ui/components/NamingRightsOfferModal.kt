@@ -330,16 +330,20 @@ fun NamingRightsOfferModal(
                     }
 
                     Text(
-                        text = "SELECT STADIUM SPONSORSHIP PACKAGE (3 PROCEDURAL BIDS)",
+                        text = "SELECT STADIUM SPONSORSHIP PACKAGE (6 OFFERS • MAX 2 PER TIER)",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Black,
                         color = GoldPrimary,
                         letterSpacing = 0.7.sp
                     )
 
+                    val tierCounts = mutableMapOf<Int, Int>()
                     session.offers.forEach { offer ->
+                        val occurrence = (tierCounts[offer.tier] ?: 0) + 1
+                        tierCounts[offer.tier] = occurrence
                         NamingRightsSponsorOfferCard(
                             offer = offer,
+                            tierOccurrence = occurrence,
                             isSelected = selectedOfferId == offer.id && offer.isEligible,
                             onClick = {
                                 if (offer.isEligible) {
@@ -391,6 +395,7 @@ fun NamingRightsOfferModal(
 @Composable
 private fun NamingRightsSponsorOfferCard(
     offer: NamingRightsSponsorOffer,
+    tierOccurrence: Int,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
@@ -404,6 +409,11 @@ private fun NamingRightsSponsorOfferCard(
         isSelected -> GoldPrimary
         else -> tierAccent.copy(alpha = 0.45f)
     }
+    val cardTag = if (tierOccurrence <= 1) {
+        "card_naming_offer_tier_${offer.tier}"
+    } else {
+        "card_naming_offer_tier_${offer.tier}_$tierOccurrence"
+    }
 
     Surface(
         color = when {
@@ -416,7 +426,7 @@ private fun NamingRightsSponsorOfferCard(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (offer.isEligible) Modifier.clickable(onClick = onClick) else Modifier)
-            .testTag("card_naming_offer_tier_${offer.tier}")
+            .testTag(cardTag)
     ) {
         Column(
             modifier = Modifier.padding(12.dp),

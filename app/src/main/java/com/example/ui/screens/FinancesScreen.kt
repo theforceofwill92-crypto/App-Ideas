@@ -124,15 +124,17 @@ fun FinancesScreen(
     // Revenue streams totals for Treasury Charts
     val broadcastRevAnnual = uiState.activeBroadcast.annualPayoutMillions * 0.15f
     val sponsorRevAnnual = (uiState.franchises.sumOf { it.localSponsorRevenueMillions } * 0.15f)
+    val leagueSponsorsRevAnnual = uiState.leagueSponsors.totalAnnualPayoutMillions.toFloat()
     val namingRightsRevAnnual = (uiState.franchises.sumOf { it.stadium.namingRightsRevenue } * 0.15f)
     val expansionRevAnnual = uiState.franchises.size * 5f
     val luxuryTaxAnnual = uiState.financialSnapshots.sumOf { it.luxuryTaxRevenue.toDouble() }.toFloat().coerceAtLeast(3f)
 
     val revenueSlices = listOf(
         SliceItem("Broadcast Rights", broadcastRevAnnual, CyanAccent),
+        SliceItem("League Sponsors", leagueSponsorsRevAnnual.coerceAtLeast(0.5f), GoldPrimary),
         SliceItem("Local Sponsors", sponsorRevAnnual, EmeraldAccent),
         SliceItem("Naming Rights", namingRightsRevAnnual, AmberAccent),
-        SliceItem("Expansion Fees", expansionRevAnnual, GoldPrimary),
+        SliceItem("Expansion Fees", expansionRevAnnual, Color(0xFF3B82F6)),
         SliceItem("Luxury Tax", luxuryTaxAnnual, Color(0xFFA855F7))
     )
 
@@ -1032,6 +1034,70 @@ fun FinancesScreen(
                                 fontWeight = FontWeight.SemiBold,
                                 color = GoldPrimary
                             )
+                        }
+                    }
+                }
+            }
+
+            // League-Wide Sponsors (4 Category Slots: Apparel, Beverage, Tech, Betting)
+            item {
+                val ls = uiState.leagueSponsors
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp)
+                        .clickable { viewModel.openLeagueSponsorsScreen(true) }
+                        .testTag("banner_finances_league_sponsors")
+                        .border(1.5.dp, GoldPrimary, RoundedCornerShape(16.dp)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(GoldPrimary),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.WorkspacePremium, contentDescription = null, tint = Color.Black, modifier = Modifier.size(26.dp))
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "OFFICIAL LEAGUE SPONSORS (${ls.activeCount}/4)",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = GoldPrimary,
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = "League Sponsors • Apparel, Beverage, Tech & Betting",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Black,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Active Payout: +\$${ls.totalAnnualPayoutMillions}M/yr added to league revenue & Salary Cap.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { viewModel.openLeagueSponsorsScreen(true) },
+                            colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("btn_finances_open_league_sponsors")
+                        ) {
+                            Text("Manage", color = Color.Black, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
