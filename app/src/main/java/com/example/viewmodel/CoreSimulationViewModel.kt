@@ -367,7 +367,8 @@ class CoreSimulationViewModel : ViewModel() {
             fanGrowthBonusPct = fanGrowthBonusPct,
             facilityValuationGainMillions = facilityValuationGainMillions,
             specialEventBonusMillions = specialEventBonusMillions,
-            leagueSponsors = state.leagueSponsors
+            leagueSponsors = state.leagueSponsors,
+            ticketConcessionCapActive = state.prDamageControlState.ticketConcessionCapActiveThisSeason
         )
         val newCash = (state.cashReservesMillions + breakdown.netCashFlowMillions).coerceAtLeast(0L)
         val newValuation = (state.leagueValuationMillions + breakdown.valuationDeltaMillions).coerceAtLeast(100L)
@@ -1675,11 +1676,85 @@ class CoreSimulationViewModel : ViewModel() {
                 weekNumber = week
             )
         }
+        val scandalExtraHeadlines = mutableListOf<String>()
+        var scandalIntegrityDelta = 0
+        var scandalOwnerDelta = 0
+        var scandalSentimentDelta = 0
+        var scandalFranchises = resultState.franchises
+
+        val countdownOutcome = LeagueScandalEngine.tickScandalCountdownOnAdvanceWeek(
+            sponsorsState = postScandalLeagueSponsors,
+            seasonYear = resultState.currentYear,
+            weekNumber = week
+        )
+        if (countdownOutcome != null) {
+            postScandalLeagueSponsors = countdownOutcome.updatedSponsorsState
+            scandalExtraHeadlines.add(countdownOutcome.headline)
+            if (countdownOutcome.penaltyApplied) {
+                scandalIntegrityDelta += countdownOutcome.integrityDelta
+                scandalOwnerDelta += countdownOutcome.ownerApprovalDelta
+                scandalSentimentDelta += countdownOutcome.fanSentimentDelta
+                scandalFranchises = scandalFranchises.map { team ->
+                    team.copy(
+                        fanMorale = (team.fanMorale + countdownOutcome.fanSentimentDelta).coerceIn(5, 99),
+                        fanLoyalty = (team.fanLoyalty + (countdownOutcome.fanSentimentDelta / 2)).coerceIn(5, 100),
+                        ownership = team.ownership.copy(
+                            ownerApproval = (team.ownership.ownerApproval + countdownOutcome.ownerApprovalDelta).coerceIn(5, 100)
+                        )
+                    )
+                }
+                emitDashboardSnackbar(
+                    DashboardSnackbarEvent(
+                        id = "snack_scandal_penalty_${resultState.currentYear}_w$week",
+                        type = DashboardAlertType.CRISIS_ALERT,
+                        severity = DashboardAlertSeverity.CRITICAL,
+                        message = countdownOutcome.headline,
+                        actionLabel = "Sponsors",
+                        targetRoute = DashboardSnackbarRoute.LEAGUE_SPONSORS
+                    )
+                )
+            }
+        } else {
+            val (afterRandomScandal, generatedScandal) = LeagueScandalEngine.maybeGenerateRandomLeagueScandal(
+                sponsorsState = postScandalLeagueSponsors,
+                franchises = scandalFranchises,
+                sportType = sport,
+                leagueIntegrityScore = resultState.leagueIntegrityScore,
+                seasonYear = resultState.currentYear,
+                week = week
+            )
+            postScandalLeagueSponsors = afterRandomScandal
+            if (generatedScandal != null) {
+                val scandalAlert = "LEAGUE SCANDAL (${generatedScandal.severity.label}): ${generatedScandal.title} — ${generatedScandal.summary} Intervene within ${generatedScandal.weeksUntilPenalty}w to protect sponsors!"
+                scandalExtraHeadlines.add(scandalAlert)
+                scandalIntegrityDelta -= 3
+                scandalSentimentDelta -= 4
+                scandalFranchises = scandalFranchises.map { team ->
+                    team.copy(fanMorale = (team.fanMorale - 4).coerceIn(5, 99))
+                }
+                emitDashboardSnackbar(
+                    DashboardSnackbarEvent(
+                        id = "snack_scandal_${generatedScandal.id}",
+                        type = DashboardAlertType.CRISIS_ALERT,
+                        severity = DashboardAlertSeverity.CRITICAL,
+                        message = "${generatedScandal.title} — Intervene within ${generatedScandal.weeksUntilPenalty}w!",
+                        actionLabel = "Sponsors",
+                        targetRoute = DashboardSnackbarRoute.LEAGUE_SPONSORS
+                    )
+                )
+            }
+        }
+
+        val nextPrControlState = state.prDamageControlState.advanceTurn()
         resultState = resultState.copy(
+            franchises = scandalFranchises,
             crisisState = updatedCrisisState,
             activeDilemma = triggeredDilemma,
             stadiumDealState = postRebuildStadiumState,
-            leagueSponsors = postScandalLeagueSponsors
+            leagueSponsors = postScandalLeagueSponsors,
+            prDamageControlState = nextPrControlState,
+            leagueIntegrityScore = (resultState.leagueIntegrityScore + scandalIntegrityDelta).coerceIn(10, 100),
+            ownerApprovalRating = (resultState.ownerApprovalRating + scandalOwnerDelta).coerceIn(5, 100)
         )
 
         val triggerEval = evaluateLaborUnionTriggers(
@@ -1689,7 +1764,8 @@ class CoreSimulationViewModel : ViewModel() {
         )
 
         val compiledNews = (
-            triggerEval.headlines +
+            scandalExtraHeadlines +
+                triggerEval.headlines +
                 listOfNotNull(crisisHeadline) +
                 disciplinaryTick.headlines +
                 officiatingEval.headlines +
@@ -1777,13 +1853,31 @@ class CoreSimulationViewModel : ViewModel() {
             totalLeagueFanbaseMillions = postBroadcastFanbase,
             recentNews = (listOfNotNull(periodicBroadcastResult?.headline) + compiledNews).take(20)
         )
-        val updatedFanSentiment = FanSentimentEngine.runWeeklyBroadcastPulse(
+        val updatedFanSentimentBase = FanSentimentEngine.runWeeklyBroadcastPulse(
             currentState = finalPreTrendState.fanSentimentState,
             franchises = finalPreTrendState.franchises,
             sportType = sport,
             seasonYear = finalPreTrendState.currentYear,
             weekNumber = week
         )
+        val updatedFanSentiment = if (scandalSentimentDelta != 0) {
+            FanSentimentEngine.recordDecisionReaction(
+                currentState = updatedFanSentimentBase,
+                category = FanDecisionCategory.CRISIS_RULING,
+                decisionTitle = if (countdownOutcome?.penaltyApplied == true) "Unaddressed Scandal Fallout" else "League Scandal Fallout",
+                decisionSummary = scandalExtraHeadlines.firstOrNull() ?: "League scandal rattled sponsors and fan confidence.",
+                casualDelta = scandalSentimentDelta,
+                dieHardDelta = scandalSentimentDelta,
+                franchiseName = finalPreTrendState.leagueName,
+                cityName = finalPreTrendState.franchises.firstOrNull()?.cityName ?: "National",
+                sportType = sport,
+                seasonYear = finalPreTrendState.currentYear,
+                weekNumber = week,
+                seedOffset = week + 41
+            )
+        } else {
+            updatedFanSentimentBase
+        }
         val securityRefreshedPreTrend = finalPreTrendState.copy(
             fanSentimentState = updatedFanSentiment,
             jobSecurityLegacyState = JobSecurityLegacyEngine.recalculateLiveSecurity(
@@ -1856,6 +1950,7 @@ class CoreSimulationViewModel : ViewModel() {
             totalLeagueFanbaseMillions = Math.round((state.totalLeagueFanbaseMillions + simulationOutcome.fanbaseGainMillions) * 100.0) / 100.0,
             leagueValuationMillions = state.leagueValuationMillions + simulationOutcome.valuationGainMillions + facilityTick.totalLeagueValuationGainMillions,
             allStarRedesignState = simulationOutcome.updatedRedesignState,
+            prDamageControlState = state.prDamageControlState.advanceTurn(),
             currentWeekMatches = nextMatches,
             recentNews = (listOf(simulationOutcome.headline) + faSweep.headlines + facilityTick.headlines + recoveryTick.clearanceHeadlines + state.recentNews).take(20)
         )
@@ -2067,7 +2162,8 @@ class CoreSimulationViewModel : ViewModel() {
                 franchises = updatedFranchises,
                 activeBroadcast = state.activeBroadcast,
                 unionAgreement = state.unionAgreement,
-                leagueSponsors = state.leagueSponsors
+                leagueSponsors = state.leagueSponsors,
+                ticketConcessionCapActive = state.prDamageControlState.ticketConcessionCapActiveThisSeason
             )
             val newHistory = LeagueValuationHistory(
                 year = state.currentYear,
@@ -2194,6 +2290,7 @@ class CoreSimulationViewModel : ViewModel() {
                 valuationHistory = listOf(newHistory) + state.valuationHistory,
                 activeOffSeasonSession = offSeasonSession,
                 showOffSeasonScreen = true,
+                prDamageControlState = state.prDamageControlState.advanceTurn(),
                 seasonScheduleState = state.seasonScheduleState.copy(upcomingPlan = preUpcomingSchedule),
                 recordBook = statsResult.recordBook,
                 weeklyAwards = updatedWeeklyAwards,
@@ -2330,6 +2427,7 @@ class CoreSimulationViewModel : ViewModel() {
                 officiatingState = playoffOfficiating.updatedState,
                 stadiumDealState = playoffRoundStadiumState,
                 leagueSponsors = playoffRoundSponsors,
+                prDamageControlState = state.prDamageControlState.advanceTurn(),
                 leagueIntegrityScore = (state.leagueIntegrityScore + playoffOfficiating.integrityDelta).coerceIn(20, 100),
                 minorLeagueState = minorPoRound.minorState,
                 cashReservesMillions = (state.cashReservesMillions + playoffRivalryCashCut - playoffOfficiating.weeklyTechOpsCostMillions).coerceAtLeast(0L),
@@ -2487,13 +2585,15 @@ class CoreSimulationViewModel : ViewModel() {
         }
 
         val (rolledLeagueSponsors, sponsorExpiryNews) = LeagueSponsorsEngine.advanceOffseasonContracts(state.leagueSponsors)
+        val rolledPrState = state.prDamageControlState.advanceOffseason(nextYear)
 
         // Decrement CBA years remaining & scale next season's Salary Cap from annual league revenue (including stadium naming rights & league sponsors)
         val capProjection = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
             franchises = state.franchises,
             activeBroadcast = newBroadcastDeal,
             unionAgreement = state.unionAgreement,
-            leagueSponsors = rolledLeagueSponsors
+            leagueSponsors = rolledLeagueSponsors,
+            ticketConcessionCapActive = state.prDamageControlState.ticketConcessionCapActiveThisSeason
         )
         val decrementedCbaYears = (state.unionAgreement.cbaYearsRemaining - 1).coerceAtLeast(0)
         val rolledUnionAgreement = state.unionAgreement.copy(
@@ -2673,6 +2773,7 @@ class CoreSimulationViewModel : ViewModel() {
             rivalLeague = offseasonRivalCheck.updatedRivalLeague,
             stadiumDealState = stadiumRolloverCheck.updatedStadiumDealState,
             leagueSponsors = rolledLeagueSponsors,
+            prDamageControlState = rolledPrState,
             unionAgreement = rolledUnionAgreement,
             officiatingState = rolledOfficiatingState,
             leagueValuationMillions = state.leagueValuationMillions + offSeasonFacilityTick.totalLeagueValuationGainMillions + facilityAppreciationDelta,

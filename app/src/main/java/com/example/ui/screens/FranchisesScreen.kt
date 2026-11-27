@@ -269,27 +269,60 @@ fun FranchisesScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    OutlinedButton(
-                        onClick = { showContinentalBuilderDialog = true },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .defaultMinSize(minHeight = 48.dp)
-                            .testTag("btn_banner_continental_conferences"),
-                        shape = RoundedCornerShape(10.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, CyanAccent.copy(alpha = 0.6f))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.Public, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (continentalEnabledCount == 0) {
-                                "Create Continental Conferences (EUR • SA • APAC)"
-                            } else {
-                                "Manage Continental Conferences ($continentalEnabledCount/3 Active)"
-                            },
-                            color = CyanAccent,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.labelMedium
-                        )
+                        Button(
+                            onClick = { viewModel.openFranchiseManagementModal(true) },
+                            colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .defaultMinSize(minHeight = 48.dp)
+                                .testTag("btn_open_franchise_management")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AddBusiness,
+                                contentDescription = "Open Franchise Management",
+                                tint = Color.Black,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Add Franchise",
+                                color = Color.Black,
+                                fontWeight = FontWeight.Black,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = { showContinentalBuilderDialog = true },
+                            modifier = Modifier
+                                .weight(1f)
+                                .defaultMinSize(minHeight = 48.dp)
+                                .testTag("btn_banner_continental_conferences"),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, CyanAccent.copy(alpha = 0.6f))
+                        ) {
+                            Icon(Icons.Default.Public, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (continentalEnabledCount == 0) {
+                                    "Continental (0/3)"
+                                } else {
+                                    "Continental ($continentalEnabledCount/3)"
+                                },
+                                color = CyanAccent,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }

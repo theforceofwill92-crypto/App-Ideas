@@ -145,6 +145,23 @@ object FacilityEngine {
         franchise: Franchise,
         totalRevenueMillions: Double
     ): FranchiseValuationBreakdown {
+        val customInitial = franchise.initialValuationMillions?.takeIf { it > 0L }
+        if (customInitial != null) {
+            val facilityAppreciation = (franchise.facilities.accumulatedFacilityValueMillions +
+                franchise.facilities.ongoingProjects.sumOf { it.costMillions } * 0.45).roundToInt().toLong()
+            val total = (customInitial + facilityAppreciation).coerceAtLeast(1L)
+            val marketValue = (customInitial * 0.45).roundToInt().toLong().coerceAtLeast(1L)
+            val commercialValue = (customInitial * 0.30).roundToInt().toLong()
+            val loyaltyGoodwill = (customInitial * 0.10).roundToInt().toLong()
+            val facilityAsset = (total - marketValue - commercialValue - loyaltyGoodwill).coerceAtLeast(0L)
+            return FranchiseValuationBreakdown(
+                totalValuationMillions = total,
+                marketAndBrandMillions = marketValue,
+                commercialMultipleMillions = commercialValue,
+                facilityAssetMillions = facilityAsset,
+                loyaltyGoodwillMillions = loyaltyGoodwill
+            )
+        }
         val marketValue = (franchise.fanBaseMillions * 48.0 +
             (franchise.rosterRating - 65).coerceAtLeast(0) * 3.5 +
             franchise.championships * 32.0).roundToInt().toLong().coerceAtLeast(60L)

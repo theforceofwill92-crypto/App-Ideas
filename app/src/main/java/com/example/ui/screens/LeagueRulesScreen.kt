@@ -174,6 +174,16 @@ fun LeagueRulesScreen(
             Spacer(modifier = Modifier.height(14.dp))
         }
 
+        uiState.leagueSponsors.activeBreachWarning?.let { warning ->
+            item(key = "rules_sponsor_breach_warning") {
+                SponsorBreachWarningCard(
+                    warning = warning,
+                    onDismiss = { viewModel.dismissSponsorBreachWarning() }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+
         // Sport-Specific Competition & Rule Committee Hub Card
         item {
             val committee = uiState.ruleCommitteeState

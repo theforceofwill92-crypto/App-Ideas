@@ -191,6 +191,66 @@ fun OffSeasonSummitScreen(
                 }
             }
 
+            uiState.leagueSponsors.activeBreachWarning?.let { warning ->
+                item {
+                    SponsorBreachWarningCard(
+                        warning = warning,
+                        onDismiss = { viewModel.dismissSponsorBreachWarning() }
+                    )
+                }
+            }
+
+            if (uiState.leagueSponsors.pendingOffseasonRuleVotes.isNotEmpty() &&
+                currentStep != OffSeasonStep.RULES_COMMITTEE
+            ) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("banner_offseason_pending_sponsor_rules")
+                            .border(1.5.dp, GoldPrimary.copy(alpha = 0.65f), RoundedCornerShape(14.dp))
+                            .clickable { viewModel.setOffSeasonStep(OffSeasonStep.RULES_COMMITTEE) },
+                        colors = CardDefaults.cardColors(containerColor = GoldPrimary.copy(alpha = 0.12f)),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "OFFSEASON RULES COMMITTEE VOTE REQUIRED (${uiState.leagueSponsors.pendingOffseasonRuleVotes.size})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Black,
+                                    color = GoldPrimary
+                                )
+                                Text(
+                                    text = uiState.leagueSponsors.pendingOffseasonRuleVotes.joinToString(", ") { it.ruleName },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = { viewModel.setOffSeasonStep(OffSeasonStep.RULES_COMMITTEE) },
+                                colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("btn_jump_offseason_rules_committee")
+                            ) {
+                                Text("Vote", color = Color.Black, fontWeight = FontWeight.Black)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Parity Impact Banner
             item {
                 Card(
@@ -361,6 +421,18 @@ fun OffSeasonSummitScreen(
                             onConveneNow = { viewModel.conveneAnnualPerformanceReviewNow() },
                             onRatifyReview = { choice -> viewModel.ratifyPendingAnnualReview(choice) },
                             isReviewMode = isReviewMode,
+                            onProceedNext = { viewModel.setOffSeasonStep(OffSeasonStep.RULES_COMMITTEE) }
+                        )
+                    }
+                }
+                OffSeasonStep.RULES_COMMITTEE -> {
+                    item {
+                        OffSeasonSponsorRulesCommitteePanel(
+                            pendingVotes = uiState.leagueSponsors.pendingOffseasonRuleVotes,
+                            sponsorContracts = uiState.leagueSponsors.allActiveContracts(),
+                            isReviewMode = isReviewMode,
+                            onVoteRule = { ruleId, approve -> viewModel.voteOnSponsorRuleDemand(ruleId, approve) },
+                            onOpenFullCommittee = { viewModel.openRuleCommitteeScreen(true) },
                             onProceedNext = { viewModel.setOffSeasonStep(OffSeasonStep.SUMMARY) }
                         )
                     }
@@ -2553,6 +2625,202 @@ private fun SummaryParityPanel(
                 ) {
                     Text("Return to Commissioner Desk", fontWeight = FontWeight.Bold)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OffSeasonSponsorRulesCommitteePanel(
+    pendingVotes: List<OffseasonSponsorRuleVoteItem>,
+    sponsorContracts: List<LeagueSponsorContract>,
+    isReviewMode: Boolean,
+    onVoteRule: (ruleId: String, approve: Boolean) -> Unit,
+    onOpenFullCommittee: () -> Unit,
+    onProceedNext: () -> Unit
+) {
+    val demandContracts = sponsorContracts.filter { it.ruleDemand != null }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("panel_offseason_rules_committee"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "PHASE 10 • OFFSEASON RULES COMMITTEE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = GoldPrimary,
+                        fontWeight = FontWeight.Black
+                    )
+                    Text(
+                        text = "Sponsor Rule Demands & Covenant Vote",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Black,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                OutlinedButton(
+                    onClick = onOpenFullCommittee,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("btn_offseason_open_full_committee")
+                ) {
+                    Text("Full Docket", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+
+            Text(
+                text = "Vote on commercial rules demanded by high-tier League Sponsors. Passing unlocks bonus revenue (+Salary Cap) while penalizing fans and union morale. Voting down or repealing cuts the sponsor's payout in half and triggers a breach warning.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (pendingVotes.isEmpty() && demandContracts.isEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "No commercial sponsor rule demands are currently on the offseason docket.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(14.dp)
+                    )
+                }
+            } else {
+                pendingVotes.forEach { vote ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(12.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.2.dp, GoldPrimary.copy(alpha = 0.55f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("offseason_sponsor_vote_card_${vote.ruleId}")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "${vote.sponsorName} (${vote.slotType.displayName}) • AWAITING VOTE",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = Color(vote.slotType.accentHex)
+                            )
+                            Text(
+                                text = vote.ruleName,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Black,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (vote.summary.isNotBlank()) {
+                                Text(
+                                    text = vote.summary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = "Pass Effects: +\$${vote.bonusPayout}M/yr Revenue • Fan -${vote.fanPenalty} • Union -${vote.unionPenalty}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = EmeraldAccent
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { onVoteRule(vote.ruleId, false) },
+                                    enabled = !isReviewMode,
+                                    border = androidx.compose.foundation.BorderStroke(1.2.dp, CrimsonAlert),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = CrimsonAlert),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("btn_offseason_reject_rule_${vote.ruleId}")
+                                ) {
+                                    Text("Vote Down (-50%)", fontWeight = FontWeight.Black)
+                                }
+                                Button(
+                                    onClick = { onVoteRule(vote.ruleId, true) },
+                                    enabled = !isReviewMode,
+                                    colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("btn_offseason_pass_rule_${vote.ruleId}")
+                                ) {
+                                    Text("Pass Rule", color = Color.Black, fontWeight = FontWeight.Black)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                demandContracts.filter { c -> pendingVotes.none { it.ruleId == c.ruleDemand?.ruleId } }.forEach { contract ->
+                    val demand = contract.ruleDemand!!
+                    val accent = if (demand.isBreached) CrimsonAlert else EmeraldAccent
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(12.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "${contract.name} • ${demand.status.label.uppercase()}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = accent
+                            )
+                            Text(
+                                text = demand.ruleName,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (demand.isPassed) {
+                                    "Active in League Rules (+$${demand.bonusPayout}M/yr bonus active)"
+                                } else {
+                                    "Breached covenant — payout reduced to \$${contract.payout}M/yr"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = accent
+                            )
+                        }
+                    }
+                }
+            }
+
+            Button(
+                onClick = onProceedNext,
+                colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 48.dp)
+                    .testTag("btn_rules_committee_to_summary")
+            ) {
+                Text("Proceed to Parity & Off-Season Summary", color = Color.Black, fontWeight = FontWeight.Black)
             }
         }
     }

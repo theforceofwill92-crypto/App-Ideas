@@ -82,6 +82,7 @@ fun DashboardSnackbarEffect(
                     DashboardSnackbarRoute.STADIUM_ULTIMATUM -> viewModel.setSelectedTab(0)
                     DashboardSnackbarRoute.FAN_SENTIMENT_PULSE -> viewModel.openFanSentimentScreen(true)
                     DashboardSnackbarRoute.BROADCAST_WAR_ROOM -> viewModel.openBroadcastNegotiations(true)
+                    DashboardSnackbarRoute.LEAGUE_SPONSORS -> viewModel.openLeagueSponsorsScreen(true)
                     null -> Unit
                 }
             }

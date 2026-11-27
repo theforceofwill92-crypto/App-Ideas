@@ -313,4 +313,144 @@ class LeagueSponsorsSystemTest {
         assertNull(vm.uiState.value.leagueSponsors.activeUltimatum)
         assertNotNull(vm.uiState.value.leagueSponsors.betting)
     }
+
+    @Test
+    fun highTierOffersCarryRuleDemandSigningQueuesOffseasonVoteAndPassingActivatesRuleAndBonus() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val repo = LeagueRepository(context)
+        repo.clearPrefsSync()
+
+        val vm = LeagueViewModel(context as Application)
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+
+        vm.openLeagueSponsorSlotOffers(LeagueSponsorSlotType.TECH)
+        val offers = vm.uiState.value.leagueSponsors.activeOfferSession!!.offers
+        assertTrue(
+            "Low/moderate offers must not carry ruleDemand",
+            offers.filter { !it.scandalSensitivity.isHigh }.all { it.ruleDemand == null }
+        )
+        val highOffer = offers.last { it.scandalSensitivity.isHigh }
+        val demand = highOffer.ruleDemand
+        assertNotNull("High-tier sponsor offer must carry ruleDemand", demand)
+        assertTrue(demand!!.ruleId.isNotBlank())
+        assertTrue(demand.ruleName.isNotBlank())
+        assertTrue(demand.bonusPayout > 0L)
+        assertTrue(demand.fanPenalty > 0)
+        assertTrue(demand.unionPenalty > 0)
+
+        val baselineUnionSat = vm.uiState.value.unionAgreement.unionSatisfaction
+        val baselineFanMorale = vm.uiState.value.franchises.first().fanMorale
+        val baselineRevProjection = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
+            franchises = vm.uiState.value.franchises,
+            activeBroadcast = vm.uiState.value.activeBroadcast,
+            unionAgreement = vm.uiState.value.unionAgreement,
+            leagueSponsors = vm.uiState.value.leagueSponsors
+        )
+
+        val signOutcome = vm.signLeagueSponsorOffer(highOffer.id)
+        assertTrue(signOutcome.success)
+        assertEquals(1, vm.uiState.value.leagueSponsors.pendingOffseasonRuleVotes.size)
+        assertEquals(demand.ruleId, vm.uiState.value.leagueSponsors.pendingOffseasonRuleVotes.first().ruleId)
+        assertTrue(
+            "Rule demand must be automatically added to Rule Committee docket",
+            vm.uiState.value.ruleCommitteeState.proposals.any { it.id == demand.ruleId }
+        )
+
+        // Revenue before rule passes includes only base payout
+        assertEquals(highOffer.payout, vm.uiState.value.leagueSponsors.totalAnnualPayoutMillions)
+
+        // Pass the rule in Offseason Rules Committee vote
+        val voteOutcome = vm.voteOnSponsorRuleDemand(demand.ruleId, approve = true)
+        assertTrue(voteOutcome.success)
+        assertTrue(voteOutcome.passed)
+        assertTrue(vm.uiState.value.leagueSponsors.pendingOffseasonRuleVotes.isEmpty())
+
+        // Verify rule activated in league rules list & bonusPayout added to annual league revenue
+        val enactedRule = vm.uiState.value.ruleBook.rules.firstOrNull { it.id == demand.ruleId }
+        assertNotNull("Passed sponsor rule must be added & enacted in ruleBook.rules", enactedRule)
+        assertTrue(enactedRule!!.isEnacted)
+        assertEquals(
+            highOffer.payout + demand.bonusPayout,
+            vm.uiState.value.leagueSponsors.totalAnnualPayoutMillions
+        )
+
+        val postPassRevProjection = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
+            franchises = vm.uiState.value.franchises,
+            activeBroadcast = vm.uiState.value.activeBroadcast,
+            unionAgreement = vm.uiState.value.unionAgreement,
+            leagueSponsors = vm.uiState.value.leagueSponsors
+        )
+        assertEquals(
+            baselineRevProjection.annualLeagueRevenueMillions + highOffer.payout + demand.bonusPayout,
+            postPassRevProjection.annualLeagueRevenueMillions
+        )
+
+        // Verify fanPenalty & unionPenalty applied
+        assertEquals(
+            (baselineUnionSat - demand.unionPenalty).coerceIn(10, 100),
+            vm.uiState.value.unionAgreement.unionSatisfaction
+        )
+        assertTrue(
+            "Fan morale must reflect fanPenalty (before: $baselineFanMorale, after: ${vm.uiState.value.franchises.first().fanMorale})",
+            vm.uiState.value.franchises.first().fanMorale < baselineFanMorale + 2
+        )
+
+        // Verify persistence across reload
+        val reloadedSponsors = repo.loadLeagueSponsorsState()
+        val reloadedRules = repo.loadLeagueSettings()
+        assertNotNull(reloadedSponsors?.tech?.ruleDemand)
+        assertTrue(reloadedSponsors!!.tech!!.ruleDemand!!.isPassed)
+        assertTrue(reloadedRules!!.rules.any { it.id == demand.ruleId && it.isEnacted })
+
+        // Later repealing the rule while sponsor is active cuts payout in half & triggers Sponsor Breach Warning
+        vm.repealRule(demand.ruleId)
+        val afterRepealSponsor = vm.uiState.value.leagueSponsors.tech!!
+        assertEquals((highOffer.payout / 2L).coerceAtLeast(1L), afterRepealSponsor.payout)
+        assertEquals(0L, afterRepealSponsor.bonusPayoutActiveMillions)
+        assertTrue(afterRepealSponsor.ruleDemand!!.isBreached)
+        assertNotNull(
+            "Repealing active sponsor rule must trigger Sponsor Breach Warning",
+            vm.uiState.value.leagueSponsors.activeBreachWarning
+        )
+    }
+
+    @Test
+    fun votingDownSponsorRuleInOffseasonCutsPayoutInHalfAndDisplaysAngryBreachWarningCard() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        LeagueRepository(context).clearPrefsSync()
+        val vm = LeagueViewModel(context as Application)
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+
+        vm.openLeagueSponsorSlotOffers(LeagueSponsorSlotType.BETTING)
+        val highOffer = vm.uiState.value.leagueSponsors.activeOfferSession!!.offers
+            .last { it.scandalSensitivity.isHigh }
+        val demand = highOffer.ruleDemand!!
+        vm.signLeagueSponsorOffer(highOffer.id)
+
+        // Open League Sponsors screen and test Rule Committee voting down + Breach Warning UI
+        vm.openOffSeasonSummit(true)
+        vm.setOffSeasonStep(com.example.model.OffSeasonStep.RULES_COMMITTEE)
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                MainAppContent(viewModel = vm)
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("panel_offseason_rules_committee").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("offseason_sponsor_vote_card_${demand.ruleId}").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("btn_offseason_reject_rule_${demand.ruleId}").performClick()
+        composeTestRule.waitForIdle()
+
+        val afterVoteDown = vm.uiState.value.leagueSponsors.betting!!
+        assertEquals((highOffer.payout / 2L).coerceAtLeast(1L), afterVoteDown.payout)
+        assertEquals(0L, afterVoteDown.bonusPayoutActiveMillions)
+        assertTrue(afterVoteDown.ruleDemand!!.isBreached)
+        assertNotNull(vm.uiState.value.leagueSponsors.activeBreachWarning)
+
+        composeTestRule.onNodeWithTag("card_sponsor_breach_warning").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("btn_dismiss_sponsor_breach_warning").performClick()
+        composeTestRule.waitForIdle()
+        assertNull(vm.uiState.value.leagueSponsors.activeBreachWarning)
+    }
 }

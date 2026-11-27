@@ -207,6 +207,28 @@ fun RuleCommitteeScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 if (selectedTab == 0) {
+                    uiState.leagueSponsors.activeBreachWarning?.let { warning ->
+                        item(key = "rc_sponsor_breach_warning") {
+                            SponsorBreachWarningCard(
+                                warning = warning,
+                                onDismiss = { viewModel.dismissSponsorBreachWarning() }
+                            )
+                        }
+                    }
+
+                    if (uiState.leagueSponsors.pendingOffseasonRuleVotes.isNotEmpty()) {
+                        item(key = "rc_sponsor_rule_demands_header") {
+                            OffseasonSponsorRuleVotesCard(
+                                votes = uiState.leagueSponsors.pendingOffseasonRuleVotes,
+                                isOffSeason = uiState.seasonPhase == SeasonPhase.OFF_SEASON,
+                                onVote = { ruleId, approve ->
+                                    val res = viewModel.voteOnSponsorRuleDemand(ruleId, approve)
+                                    statusFeedback = res.message
+                                }
+                            )
+                        }
+                    }
+
                     // Live Simulation Engine Impact Telemetry Card
                     item {
                         Card(
@@ -926,6 +948,131 @@ private fun SportRuleProposalCard(
                         Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Repeal Rule", modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Repeal Active Simulation Rule", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OffseasonSponsorRuleVotesCard(
+    votes: List<OffseasonSponsorRuleVoteItem>,
+    isOffSeason: Boolean,
+    onVote: (ruleId: String, approve: Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.6.dp, GoldPrimary, RoundedCornerShape(16.dp))
+            .testTag("card_committee_sponsor_rule_votes"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (isOffSeason) "OFFSEASON RULES COMMITTEE VOTE" else "QUEUED FOR OFFSEASON COMMITTEE VOTE",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        color = GoldPrimary,
+                        letterSpacing = 0.8.sp
+                    )
+                    Text(
+                        text = "Sponsor Rule Covenant Ballot (${votes.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Black,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                Surface(
+                    color = GoldPrimary.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "${votes.size} Pending",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        color = GoldPrimary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            votes.forEach { vote ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, GoldPrimary.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("item_committee_sponsor_vote_${vote.ruleId}")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "${vote.sponsorName} • ${vote.slotType.displayName}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black,
+                            color = Color(vote.slotType.accentHex)
+                        )
+                        Text(
+                            text = vote.ruleName,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (vote.summary.isNotBlank()) {
+                            Text(
+                                text = vote.summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            text = "Pass: +\$${vote.bonusPayout}M/yr Revenue • -${vote.fanPenalty} Fan • -${vote.unionPenalty} Union  |  Reject: 50% Payout Slash",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = GoldPrimary
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { onVote(vote.ruleId, false) },
+                                border = BorderStroke(1.2.dp, CrimsonAlert),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = CrimsonAlert),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("btn_committee_reject_sponsor_rule_${vote.ruleId}")
+                            ) {
+                                Text("Vote Down", fontWeight = FontWeight.Black)
+                            }
+                            Button(
+                                onClick = { onVote(vote.ruleId, true) },
+                                colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("btn_committee_pass_sponsor_rule_${vote.ruleId}")
+                            ) {
+                                Text("Pass Law", color = Color.Black, fontWeight = FontWeight.Black)
+                            }
+                        }
                     }
                 }
             }

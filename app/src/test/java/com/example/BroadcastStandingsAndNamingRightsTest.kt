@@ -159,9 +159,8 @@ class BroadcastStandingsAndNamingRightsTest {
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag("main_dashboard_screen")
-            .performScrollToNode(hasTestTag("recharts_broadcast_contracts_chart"))
         composeTestRule.onNodeWithTag("recharts_broadcast_contracts_chart")
+            .performScrollTo()
             .assertIsDisplayed()
     }
 

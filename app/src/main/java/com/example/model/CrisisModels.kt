@@ -389,10 +389,10 @@ object CrisisEngine {
                 val loyaltyDelta = choice.teamChemistryImpact + (choice.playerMoraleImpact / 2)
                 val adjustedTeam = team.copy(
                     roster = updatedRoster,
-                    fanMorale = (team.fanMorale + choice.fanMoraleImpact).coerceIn(20, 99),
-                    fanLoyalty = (team.fanLoyalty + loyaltyDelta).coerceIn(15, 100),
+                    fanMorale = (team.fanMorale + choice.fanMoraleImpact).coerceIn(5, 99),
+                    fanLoyalty = (team.fanLoyalty + loyaltyDelta).coerceIn(5, 100),
                     ownership = team.ownership.copy(
-                        ownerApproval = (team.ownership.ownerApproval + choice.ownerApprovalImpact).coerceIn(15, 99)
+                        ownerApproval = (team.ownership.ownerApproval + choice.ownerApprovalImpact).coerceIn(5, 99)
                     )
                 )
                 if (choice.playerSuspensionGames > 0) {
@@ -404,9 +404,9 @@ object CrisisEngine {
                 val rippleFan = (choice.fanMoraleImpact / 3)
                 val rippleOwner = (choice.ownerApprovalImpact / 3)
                 team.copy(
-                    fanMorale = (team.fanMorale + rippleFan).coerceIn(25, 99),
+                    fanMorale = (team.fanMorale + rippleFan).coerceIn(5, 99),
                     ownership = team.ownership.copy(
-                        ownerApproval = (team.ownership.ownerApproval + rippleOwner).coerceIn(20, 99)
+                        ownerApproval = (team.ownership.ownerApproval + rippleOwner).coerceIn(5, 99)
                     )
                 )
             } else team

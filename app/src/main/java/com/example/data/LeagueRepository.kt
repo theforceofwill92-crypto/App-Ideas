@@ -10,16 +10,25 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-class LeagueRepository(context: Context) {
+class LeagueRepository(
+    context: Context,
+    private val db: AppDatabase
+) {
 
-    private val appContext = context.applicationContext
+    constructor(context: Context) : this(
+        context = context,
+        db = DatabaseModule.provideDatabase(context)
+    )
 
-    private val db = AppDatabase.getInstance(appContext)
+    private val appContext = context.applicationContext ?: context
 
-    private val dao = db.leagueDao()
-    private val leagueStateDao = db.leagueStateDao()
-    private val revenueHistoryDao = db.leagueRevenueHistoryDao()
-    private val leagueStandingDao = db.leagueStandingDao()
+    private val dao = DatabaseModule.provideLeagueDao(db)
+    private val leagueStateDao = DatabaseModule.provideLeagueStateDao(db)
+    private val revenueHistoryDao = DatabaseModule.provideLeagueRevenueHistoryDao(db)
+    private val leagueStandingDao = DatabaseModule.provideLeagueStandingDao(db)
+    private val franchiseDao = DatabaseModule.provideFranchiseDao(db)
+    private val financialRecordDao = DatabaseModule.provideFinancialRecordDao(db)
+    private val leagueSettingsDao = DatabaseModule.provideLeagueSettingsDao(db)
     private val faPrefs by lazy {
         appContext.getSharedPreferences("apex_free_agency_prefs", Context.MODE_PRIVATE)
     }
@@ -37,6 +46,9 @@ class LeagueRepository(context: Context) {
             list.sortedBy { it.seasonYear }
         }
     val liveStandingsFlow: Flow<List<LeagueStandingEntity>> = leagueStandingDao.getLiveStandingsFlow()
+    val franchisesFlow: Flow<List<FranchiseEntity>> = franchiseDao.getAllFranchisesFlow()
+    val financialRecordsFlow: Flow<List<FinancialRecordEntity>> = financialRecordDao.getAllFinancialRecordsFlow()
+    val leagueSettingsEntityFlow: Flow<LeagueSettingsEntity?> = leagueSettingsDao.getLeagueSettingsFlow()
 
     suspend fun loadLeague(): LeagueSaveEntity? = withContext(Dispatchers.IO) {
         dao.getLeagueSave()
@@ -88,13 +100,15 @@ class LeagueRepository(context: Context) {
         activeBroadcast: BroadcastContract,
         franchises: List<Franchise>,
         championName: String = "In Progress",
-        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState(),
+        ticketConcessionCapActive: Boolean = false
     ): LeagueRevenueHistoryEntity {
         val proj = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
             franchises = franchises,
             activeBroadcast = activeBroadcast,
             unionAgreement = unionAgreement,
-            leagueSponsors = leagueSponsors
+            leagueSponsors = leagueSponsors,
+            ticketConcessionCapActive = ticketConcessionCapActive
         )
         val sponsorAnnual = franchises.sumOf { it.localSponsorRevenueMillions.coerceAtLeast(0L) } +
             leagueSponsors.totalAnnualPayoutMillions
@@ -125,7 +139,8 @@ class LeagueRepository(context: Context) {
         franchises: List<Franchise>,
         history: List<LeagueValuationHistory>,
         existingByYear: Map<Int, LeagueRevenueHistoryEntity> = emptyMap(),
-        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState(),
+        ticketConcessionCapActive: Boolean = false
     ): List<LeagueRevenueHistoryEntity> {
         val currentYearRecord = buildCurrentYearRevenueRecord(
             currentYear = currentYear,
@@ -134,7 +149,8 @@ class LeagueRepository(context: Context) {
             activeBroadcast = activeBroadcast,
             franchises = franchises,
             championName = history.firstOrNull { it.year == currentYear }?.championName ?: "In Progress",
-            leagueSponsors = leagueSponsors
+            leagueSponsors = leagueSponsors,
+            ticketConcessionCapActive = ticketConcessionCapActive
         )
         val historicalRecords = history.distinctBy { it.year }.mapNotNull { h ->
             if (h.year == currentYear) {
@@ -215,6 +231,176 @@ class LeagueRepository(context: Context) {
         leagueStandingDao.getAllStandings()
     }
 
+    fun buildFranchiseEntity(franchise: Franchise): FranchiseEntity = FranchiseEntity(
+        franchiseId = franchise.id,
+        cityId = franchise.cityId,
+        cityName = franchise.cityName,
+        nickname = franchise.nickname,
+        teamFullName = franchise.teamFullName,
+        conferenceName = franchise.conference.displayName,
+        divisionName = franchise.division.displayName,
+        colorHex = franchise.colorHex,
+        secondaryColorHex = franchise.secondaryColorHex,
+        rosterRating = franchise.rosterRating,
+        fanBaseMillions = franchise.fanBaseMillions,
+        fanMorale = franchise.fanMorale,
+        fanLoyalty = franchise.fanLoyalty,
+        teamMorale = franchise.teamMorale,
+        reputationScore = franchise.reputationScore,
+        wins = franchise.wins,
+        losses = franchise.losses,
+        pointsFor = franchise.pointsFor,
+        pointsAgainst = franchise.pointsAgainst,
+        championships = franchise.championships,
+        annualPayrollMillions = franchise.annualPayrollMillions,
+        localSponsorRevenueMillions = franchise.localSponsorRevenueMillions,
+        ticketPrice = franchise.ticketPrice,
+        stadiumCapacity = franchise.stadiumCapacity,
+        stadiumAge = franchise.stadiumAge,
+        stadiumCondition = franchise.stadiumCondition,
+        stadiumSponsorName = franchise.stadium.sponsorName,
+        stadiumSponsorTier = franchise.stadium.sponsorTier,
+        stadiumSponsorYearsLeft = franchise.stadium.sponsorYearsLeft,
+        stadiumNamingRightsRevenue = franchise.stadium.namingRightsRevenue,
+        initialValuationMillions = franchise.initialValuationMillions ?: 0L,
+        relocationCount = franchise.relocationCount,
+        lowSpendingSeasons = franchise.lowSpendingSeasons,
+        payloadJson = serializeFranchises(listOf(franchise))
+    )
+
+    fun buildFranchiseEntities(franchises: List<Franchise>): List<FranchiseEntity> =
+        franchises.map { buildFranchiseEntity(it) }
+
+    suspend fun syncFranchises(franchises: List<Franchise>) = withContext(Dispatchers.IO) {
+        franchiseDao.replaceAllFranchises(buildFranchiseEntities(franchises))
+    }
+
+    suspend fun upsertFranchiseEntity(entity: FranchiseEntity) = withContext(Dispatchers.IO) {
+        franchiseDao.insertFranchise(entity)
+    }
+
+    suspend fun loadFranchiseEntities(): List<FranchiseEntity> = withContext(Dispatchers.IO) {
+        franchiseDao.getAllFranchises()
+    }
+
+    suspend fun deleteFranchiseEntityById(franchiseId: String) = withContext(Dispatchers.IO) {
+        franchiseDao.deleteFranchiseById(franchiseId)
+    }
+
+    fun buildFinancialRecordEntity(
+        snapshot: FinancialSnapshot,
+        seasonYear: Int,
+        leagueSponsorsRevenueMillions: Float = 0f,
+        namingRightsRevenueMillions: Float = 0f,
+        recordType: String = "WEEKLY_SNAPSHOT"
+    ): FinancialRecordEntity = FinancialRecordEntity(
+        seasonYear = seasonYear,
+        weekNumber = snapshot.weekNumber,
+        periodLabel = snapshot.periodLabel,
+        recordType = recordType,
+        broadcastRevenueMillions = snapshot.broadcastRevenue,
+        sponsorshipRevenueMillions = snapshot.sponsorshipRevenue,
+        leagueSponsorsRevenueMillions = leagueSponsorsRevenueMillions,
+        namingRightsRevenueMillions = namingRightsRevenueMillions,
+        expansionFeeRevenueMillions = snapshot.expansionFeeRevenue,
+        luxuryTaxRevenueMillions = snapshot.luxuryTaxRevenue,
+        totalRevenueMillions = snapshot.totalRevenue,
+        operationsExpenseMillions = snapshot.operationsExpense,
+        marketingExpenseMillions = snapshot.marketingExpense,
+        welfareAndGrantsExpenseMillions = snapshot.welfareAndGrantsExpense,
+        totalExpensesMillions = snapshot.totalExpenses,
+        netCashFlowMillions = snapshot.netCashFlow,
+        cashReservesMillions = snapshot.cashReserves,
+        leagueValuationMillions = snapshot.valuation
+    )
+
+    suspend fun insertFinancialRecord(record: FinancialRecordEntity): Long = withContext(Dispatchers.IO) {
+        financialRecordDao.insertFinancialRecord(record)
+    }
+
+    suspend fun syncSeasonFinancialRecords(
+        seasonYear: Int,
+        snapshots: List<FinancialSnapshot>,
+        leagueSponsorsRevenueMillions: Float = 0f,
+        namingRightsRevenueMillions: Float = 0f
+    ) = withContext(Dispatchers.IO) {
+        val entities = snapshots.map { snap ->
+            buildFinancialRecordEntity(
+                snapshot = snap,
+                seasonYear = seasonYear,
+                leagueSponsorsRevenueMillions = leagueSponsorsRevenueMillions,
+                namingRightsRevenueMillions = namingRightsRevenueMillions
+            )
+        }
+        financialRecordDao.replaceSeasonFinancialRecords(seasonYear, entities)
+    }
+
+    suspend fun loadAllFinancialRecords(): List<FinancialRecordEntity> = withContext(Dispatchers.IO) {
+        financialRecordDao.getAllFinancialRecords()
+    }
+
+    suspend fun deleteFinancialRecordById(id: Long) = withContext(Dispatchers.IO) {
+        financialRecordDao.deleteFinancialRecordById(id)
+    }
+
+    fun buildLeagueSettingsJson(ruleBook: LeagueRuleBook): String {
+        val obj = JSONObject().apply {
+            put("overtimeFormat", ruleBook.overtimeFormat.name)
+            put("rosterSizeRule", ruleBook.rosterSizeRule.name)
+            put("salaryCapStrictness", ruleBook.salaryCapStrictness.name)
+            put("injuryFrequency", ruleBook.injuryFrequency.name)
+            put("gameLength", ruleBook.gameLength.name)
+            put("antiDopingPolicy", ruleBook.antiDopingPolicy.name)
+            put("antiTamperingGamblingPolicy", ruleBook.antiTamperingGamblingPolicy.name)
+            put("draftParity", ruleBook.draftParity.name)
+            put("instantReplayEnabled", ruleBook.instantReplayEnabled)
+            put("shotClockFastPace", ruleBook.shotClockFastPace)
+            put("regularSeasonWeeks", ruleBook.regularSeasonWeeks)
+            val enactedObj = JSONObject()
+            ruleBook.rules.forEach { r ->
+                enactedObj.put(r.id, r.isEnacted)
+            }
+            put("rulesEnactedMap", enactedObj)
+        }
+        return obj.toString()
+    }
+
+    fun buildLeagueSettingsEntity(
+        leagueName: String,
+        sportType: SportType,
+        commissionerBackground: CommissionerBackground,
+        unionAgreement: LaborUnionAgreement,
+        ruleBook: LeagueRuleBook
+    ): LeagueSettingsEntity = LeagueSettingsEntity(
+        id = 1,
+        leagueName = leagueName,
+        sportType = sportType.name,
+        commissionerBackground = commissionerBackground.name,
+        salaryCapType = unionAgreement.salaryCapType.name,
+        salaryCapStrictness = ruleBook.salaryCapStrictness.name,
+        salaryCapMillions = unionAgreement.salaryCapMillions,
+        overtimeFormat = ruleBook.overtimeFormat.name,
+        rosterSizeRule = ruleBook.rosterSizeRule.name,
+        injuryFrequency = ruleBook.injuryFrequency.name,
+        gameLength = ruleBook.gameLength.name,
+        antiDopingPolicy = ruleBook.antiDopingPolicy.name,
+        antiTamperingGamblingPolicy = ruleBook.antiTamperingGamblingPolicy.name,
+        draftParity = ruleBook.draftParity.name,
+        instantReplayEnabled = ruleBook.instantReplayEnabled,
+        shotClockFastPace = ruleBook.shotClockFastPace,
+        regularSeasonWeeks = ruleBook.regularSeasonWeeks,
+        tradeDeadlineWeek = ruleBook.tradeRules.tradeDeadlineWeek,
+        ruleBookJson = buildLeagueSettingsJson(ruleBook)
+    )
+
+    suspend fun saveLeagueSettingsToRoom(settings: LeagueSettingsEntity) = withContext(Dispatchers.IO) {
+        leagueSettingsDao.insertOrUpdateLeagueSettings(settings)
+    }
+
+    suspend fun loadLeagueSettingsFromRoom(): LeagueSettingsEntity? = withContext(Dispatchers.IO) {
+        leagueSettingsDao.getLeagueSettings()
+    }
+
     fun buildLeagueStateSnapshot(
         leagueName: String,
         currentYear: Int,
@@ -225,13 +411,15 @@ class LeagueRepository(context: Context) {
         unionAgreement: LaborUnionAgreement,
         activeBroadcast: BroadcastContract,
         franchises: List<Franchise>,
-        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState(),
+        ticketConcessionCapActive: Boolean = false
     ): LeagueState {
         val revenueProjection = LeagueSimulationEngine.calculateAnnualLeagueRevenueAndNextCap(
             franchises = franchises,
             activeBroadcast = activeBroadcast,
             unionAgreement = unionAgreement,
-            leagueSponsors = leagueSponsors
+            leagueSponsors = leagueSponsors,
+            ticketConcessionCapActive = ticketConcessionCapActive
         )
         val sponsorAnnual = franchises.sumOf { it.localSponsorRevenueMillions.coerceAtLeast(0L) } +
             leagueSponsors.totalAnnualPayoutMillions
@@ -286,7 +474,9 @@ class LeagueRepository(context: Context) {
         freeAgentPool: List<FreeAgentPlayer>? = null,
         freeAgentSignings: List<FreeAgentSigningTransaction>? = null,
         ruleBook: LeagueRuleBook? = null,
-        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState(),
+        financialSnapshots: List<FinancialSnapshot>? = null,
+        ticketConcessionCapActive: Boolean = false
     ) = withContext(Dispatchers.IO) {
         val entity = LeagueSaveEntity(
             id = 1,
@@ -326,7 +516,8 @@ class LeagueRepository(context: Context) {
             unionAgreement = unionAgreement,
             activeBroadcast = activeBroadcast,
             franchises = franchises,
-            leagueSponsors = leagueSponsors
+            leagueSponsors = leagueSponsors,
+            ticketConcessionCapActive = ticketConcessionCapActive
         )
         leagueStateDao.upsertLeagueState(leagueState)
         val recordsToPersist = buildFiveYearRevenueRecords(
@@ -337,10 +528,35 @@ class LeagueRepository(context: Context) {
             franchises = franchises,
             history = history,
             existingByYear = revenueHistoryDao.getLastFiveYearsRevenue().associateBy { it.seasonYear },
-            leagueSponsors = leagueSponsors
+            leagueSponsors = leagueSponsors,
+            ticketConcessionCapActive = ticketConcessionCapActive
         )
         revenueHistoryDao.upsertAllAnnualRevenues(recordsToPersist)
         leagueStandingDao.replaceStandings(buildStandingEntities(franchises, currentYear, currentWeek))
+        franchiseDao.replaceAllFranchises(buildFranchiseEntities(franchises))
+        if (financialSnapshots != null) {
+            val namingPerWeek = (franchises.sumOf { it.stadium.namingRightsRevenue.coerceAtLeast(0L) } / 16f)
+            val leagueSponPerWeek = (leagueSponsors.totalAnnualPayoutMillions / 16f)
+            val finRecords = financialSnapshots.map { snap ->
+                buildFinancialRecordEntity(
+                    snapshot = snap,
+                    seasonYear = currentYear,
+                    leagueSponsorsRevenueMillions = leagueSponPerWeek,
+                    namingRightsRevenueMillions = namingPerWeek
+                )
+            }
+            financialRecordDao.replaceSeasonFinancialRecords(currentYear, finRecords)
+        }
+        val effectiveRuleBook = ruleBook ?: loadLeagueSettings() ?: LeagueRuleBook(rules = InitialLeagueData.getDefaultLeagueRules())
+        leagueSettingsDao.insertOrUpdateLeagueSettings(
+            buildLeagueSettingsEntity(
+                leagueName = leagueName,
+                sportType = sportType,
+                commissionerBackground = commissionerBackground,
+                unionAgreement = unionAgreement,
+                ruleBook = effectiveRuleBook
+            )
+        )
         if (freeAgentPool != null || freeAgentSignings != null) {
             saveFreeAgencyState(
                 pool = freeAgentPool ?: emptyList(),
@@ -363,6 +579,9 @@ class LeagueRepository(context: Context) {
         leagueStateDao.deleteLeagueState()
         revenueHistoryDao.clearRevenueHistory()
         leagueStandingDao.clearStandings()
+        franchiseDao.clearFranchises()
+        financialRecordDao.clearFinancialRecords()
+        leagueSettingsDao.deleteLeagueSettingsByDefaultId()
         clearPrefsSync()
     }
 
@@ -1258,10 +1477,34 @@ class LeagueRepository(context: Context) {
             put("shotClockFastPace", ruleBook.shotClockFastPace)
             put("regularSeasonWeeks", ruleBook.regularSeasonWeeks)
             val enactedObj = JSONObject()
+            val defaultRuleIds = InitialLeagueData.getDefaultLeagueRules().map { it.id }.toSet()
+            val customRulesArr = JSONArray()
             ruleBook.rules.forEach { r ->
                 enactedObj.put(r.id, r.isEnacted)
+                if (r.id !in defaultRuleIds) {
+                    customRulesArr.put(
+                        JSONObject().apply {
+                            put("id", r.id)
+                            put("name", r.name)
+                            put("category", r.category.name)
+                            put("summary", r.summary)
+                            put("isEnacted", r.isEnacted)
+                            put("parityImpact", r.parityImpact)
+                            put("scoringTempoModifier", r.scoringTempoModifier)
+                            put("integrityImpact", r.integrityImpact)
+                            put("fanAppealModifier", r.fanAppealModifier)
+                            put("smallMarketBenefitRating", r.smallMarketBenefitRating)
+                            put("description", r.description)
+                            put("enactedEffect", r.enactedEffect)
+                            put("repealedEffect", r.repealedEffect)
+                            put("proPerspective", r.proPerspective)
+                            put("contraPerspective", r.contraPerspective)
+                        }
+                    )
+                }
             }
             put("rulesEnactedMap", enactedObj)
+            put("customRules", customRulesArr)
         }
         settingsPrefs.edit()
             .putString("rule_settings_json", obj.toString())
@@ -1301,13 +1544,46 @@ class LeagueRepository(context: Context) {
             val regularSeasonWeeks = obj.optInt("regularSeasonWeeks", baseRuleBook.regularSeasonWeeks).coerceIn(14, 22)
             val enactedObj = obj.optJSONObject("rulesEnactedMap")
             val sourceRules = baseRuleBook.rules.ifEmpty { InitialLeagueData.getDefaultLeagueRules() }
-            val updatedRules = if (enactedObj != null) {
+            val mappedDefaultRules = if (enactedObj != null) {
                 sourceRules.map { rule ->
                     if (enactedObj.has(rule.id)) {
                         rule.copy(isEnacted = enactedObj.optBoolean(rule.id, rule.isEnacted))
                     } else rule
                 }
             } else sourceRules
+            val existingIds = mappedDefaultRules.map { it.id }.toMutableSet()
+            val customArr = obj.optJSONArray("customRules")
+            val extraRules = if (customArr != null) {
+                (0 until customArr.length()).mapNotNull { i ->
+                    val rObj = customArr.optJSONObject(i) ?: return@mapNotNull null
+                    val rId = rObj.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    if (rId in existingIds) return@mapNotNull null
+                    existingIds.add(rId)
+                    LeagueRule(
+                        id = rId,
+                        name = rObj.optString("name", "Sponsor Mandate Rule"),
+                        category = runCatching { RuleCategory.valueOf(rObj.optString("category")) }
+                            .getOrDefault(RuleCategory.FINANCIAL_PARITY),
+                        summary = rObj.optString("summary", ""),
+                        isEnacted = if (enactedObj?.has(rId) == true) {
+                            enactedObj.optBoolean(rId, rObj.optBoolean("isEnacted", true))
+                        } else {
+                            rObj.optBoolean("isEnacted", true)
+                        },
+                        parityImpact = rObj.optInt("parityImpact", 0),
+                        scoringTempoModifier = rObj.optInt("scoringTempoModifier", 0),
+                        integrityImpact = rObj.optInt("integrityImpact", 0),
+                        fanAppealModifier = rObj.optInt("fanAppealModifier", 0),
+                        smallMarketBenefitRating = rObj.optInt("smallMarketBenefitRating", 3),
+                        description = rObj.optString("description", ""),
+                        enactedEffect = rObj.optString("enactedEffect", ""),
+                        repealedEffect = rObj.optString("repealedEffect", ""),
+                        proPerspective = rObj.optString("proPerspective", ""),
+                        contraPerspective = rObj.optString("contraPerspective", "")
+                    )
+                }
+            } else emptyList()
+            val updatedRules = mappedDefaultRules + extraRules
 
             baseRuleBook.copy(
                 rules = updatedRules,
@@ -1350,6 +1626,7 @@ class LeagueRepository(context: Context) {
                 put("stadiumSponsorTier", f.stadium.sponsorTier)
                 put("stadiumSponsorYearsLeft", f.stadium.sponsorYearsLeft)
                 put("stadiumNamingRightsRevenue", f.stadium.namingRightsRevenue)
+                f.initialValuationMillions?.let { put("initialValuationMillions", it) }
                 put("relocationCount", f.relocationCount)
                 put("lowSpendingSeasons", f.lowSpendingSeasons)
                 put("reputationScore", f.reputationScore)
@@ -1579,6 +1856,7 @@ class LeagueRepository(context: Context) {
                         "lastReputationNote",
                         "Balanced ownership investment and market stability."
                     ),
+                    initialValuationMillions = obj.optLong("initialValuationMillions", 0L).takeIf { it > 0L },
                     ticketPrice = obj.getInt("ticketPrice"),
                     annualPayrollMillions = obj.getLong("annualPayrollMillions"),
                     localSponsorRevenueMillions = obj.getLong("localSponsorRevenueMillions"),
@@ -3511,7 +3789,18 @@ class LeagueRepository(context: Context) {
             val qArr = JSONArray()
             state.pendingUltimatumQueue.forEach { qArr.put(sponsorUltimatumToJson(it)) }
             put("pendingUltimatumQueue", qArr)
+            val voteArr = JSONArray()
+            state.pendingOffseasonRuleVotes.forEach { voteArr.put(offseasonRuleVoteToJson(it)) }
+            put("pendingOffseasonRuleVotes", voteArr)
+            state.activeBreachWarning?.let { put("activeBreachWarning", sponsorBreachWarningToJson(it)) }
+            val breachHistArr = JSONArray()
+            state.breachWarningHistory.forEach { breachHistArr.put(sponsorBreachWarningToJson(it)) }
+            put("breachWarningHistory", breachHistArr)
             put("expiredSlotNotices", JSONArray(state.expiredSlotNotices))
+            state.activeLeagueScandal?.let { put("activeLeagueScandal", leagueScandalToJson(it)) }
+            val scHistArr = JSONArray()
+            state.scandalHistory.forEach { scHistArr.put(leagueScandalToJson(it)) }
+            put("scandalHistory", scHistArr)
         }
         settingsPrefs.edit().putString("league_sponsors_state_json", root.toString()).apply()
     }
@@ -3524,8 +3813,20 @@ class LeagueRepository(context: Context) {
             val queue = (0 until qArr.length()).mapNotNull { i ->
                 qArr.optJSONObject(i)?.let { jsonToSponsorUltimatum(it) }
             }
+            val voteArr = root.optJSONArray("pendingOffseasonRuleVotes") ?: JSONArray()
+            val votes = (0 until voteArr.length()).mapNotNull { i ->
+                voteArr.optJSONObject(i)?.let { jsonToOffseasonRuleVote(it) }
+            }
+            val breachHistArr = root.optJSONArray("breachWarningHistory") ?: JSONArray()
+            val breachHist = (0 until breachHistArr.length()).mapNotNull { i ->
+                breachHistArr.optJSONObject(i)?.let { jsonToSponsorBreachWarning(it) }
+            }
             val expArr = root.optJSONArray("expiredSlotNotices") ?: JSONArray()
             val exp = (0 until expArr.length()).mapNotNull { i -> expArr.optString(i).takeIf { it.isNotBlank() } }
+            val scHistArr = root.optJSONArray("scandalHistory") ?: JSONArray()
+            val scHist = (0 until scHistArr.length()).mapNotNull { i ->
+                scHistArr.optJSONObject(i)?.let { jsonToLeagueScandal(it) }
+            }
             LeagueSponsorsState(
                 apparel = root.optJSONObject("apparel")?.let { jsonToLeagueSponsorContract(it, LeagueSponsorSlotType.APPAREL) },
                 beverage = root.optJSONObject("beverage")?.let { jsonToLeagueSponsorContract(it, LeagueSponsorSlotType.BEVERAGE) },
@@ -3533,7 +3834,12 @@ class LeagueRepository(context: Context) {
                 betting = root.optJSONObject("betting")?.let { jsonToLeagueSponsorContract(it, LeagueSponsorSlotType.BETTING) },
                 activeUltimatum = root.optJSONObject("activeUltimatum")?.let { jsonToSponsorUltimatum(it) },
                 pendingUltimatumQueue = queue,
+                pendingOffseasonRuleVotes = votes,
+                activeBreachWarning = root.optJSONObject("activeBreachWarning")?.let { jsonToSponsorBreachWarning(it) },
+                breachWarningHistory = breachHist,
                 expiredSlotNotices = exp,
+                activeLeagueScandal = root.optJSONObject("activeLeagueScandal")?.let { jsonToLeagueScandal(it) },
+                scandalHistory = scHist,
                 lastSummary = root.optString("lastSummary", "4 official league sponsor slots.")
             )
         } catch (_: Exception) {
@@ -3550,10 +3856,40 @@ class LeagueRepository(context: Context) {
         put("perkType", c.perkType.name)
         put("scandalSensitivity", c.scandalSensitivity.name)
         put("tagline", c.tagline)
+        put("stabilityScore", c.stabilityScore)
+        put("hasMoralityWarning", c.hasMoralityWarning)
+        c.moralityWarningReason?.let { put("moralityWarningReason", it) }
+        c.ruleDemand?.let { d ->
+            put(
+                "ruleDemand",
+                JSONObject().apply {
+                    put("ruleId", d.ruleId)
+                    put("ruleName", d.ruleName)
+                    put("bonusPayout", d.bonusPayout)
+                    put("fanPenalty", d.fanPenalty)
+                    put("unionPenalty", d.unionPenalty)
+                    put("summary", d.summary)
+                    put("status", d.status.name)
+                }
+            )
+        }
     }
 
-    private fun jsonToLeagueSponsorContract(obj: JSONObject, fallbackSlot: LeagueSponsorSlotType): LeagueSponsorContract =
-        LeagueSponsorContract(
+    private fun jsonToLeagueSponsorContract(obj: JSONObject, fallbackSlot: LeagueSponsorSlotType): LeagueSponsorContract {
+        val demandObj = obj.optJSONObject("ruleDemand")
+        val demand = demandObj?.let { d ->
+            SponsorRuleDemand(
+                ruleId = d.optString("ruleId"),
+                ruleName = d.optString("ruleName"),
+                bonusPayout = d.optLong("bonusPayout", 0L),
+                fanPenalty = d.optInt("fanPenalty", 0),
+                unionPenalty = d.optInt("unionPenalty", 0),
+                summary = d.optString("summary", ""),
+                status = runCatching { SponsorRuleDemandStatus.valueOf(d.optString("status")) }
+                    .getOrDefault(SponsorRuleDemandStatus.QUEUED_FOR_OFFSEASON)
+            )
+        }
+        return LeagueSponsorContract(
             id = obj.optString("id"),
             slotType = runCatching { LeagueSponsorSlotType.valueOf(obj.optString("slotType")) }
                 .getOrDefault(fallbackSlot),
@@ -3564,8 +3900,71 @@ class LeagueRepository(context: Context) {
                 .getOrDefault(LeagueSponsorPerkType.COMMERCIAL_REACH),
             scandalSensitivity = runCatching { SponsorScandalSensitivity.valueOf(obj.optString("scandalSensitivity")) }
                 .getOrDefault(SponsorScandalSensitivity.MODERATE),
-            tagline = obj.optString("tagline", "")
+            tagline = obj.optString("tagline", ""),
+            ruleDemand = demand,
+            stabilityScore = obj.optInt("stabilityScore", 100).coerceIn(0, 100),
+            hasMoralityWarning = obj.optBoolean("hasMoralityWarning", false),
+            moralityWarningReason = obj.optString("moralityWarningReason").takeIf { it.isNotBlank() }
         )
+    }
+
+    private fun offseasonRuleVoteToJson(v: OffseasonSponsorRuleVoteItem): JSONObject = JSONObject().apply {
+        put("ruleId", v.ruleId)
+        put("ruleName", v.ruleName)
+        put("bonusPayout", v.bonusPayout)
+        put("fanPenalty", v.fanPenalty)
+        put("unionPenalty", v.unionPenalty)
+        put("summary", v.summary)
+        put("slotType", v.slotType.name)
+        put("sponsorName", v.sponsorName)
+        put("targetOffseasonYear", v.targetOffseasonYear)
+    }
+
+    private fun jsonToOffseasonRuleVote(obj: JSONObject): OffseasonSponsorRuleVoteItem = OffseasonSponsorRuleVoteItem(
+        ruleId = obj.optString("ruleId"),
+        ruleName = obj.optString("ruleName"),
+        bonusPayout = obj.optLong("bonusPayout", 0L),
+        fanPenalty = obj.optInt("fanPenalty", 0),
+        unionPenalty = obj.optInt("unionPenalty", 0),
+        summary = obj.optString("summary", ""),
+        slotType = runCatching { LeagueSponsorSlotType.valueOf(obj.optString("slotType")) }
+            .getOrDefault(LeagueSponsorSlotType.APPAREL),
+        sponsorName = obj.optString("sponsorName", ""),
+        targetOffseasonYear = obj.optInt("targetOffseasonYear", 2026)
+    )
+
+    private fun sponsorBreachWarningToJson(w: SponsorBreachWarning): JSONObject = JSONObject().apply {
+        put("id", w.id)
+        put("slotType", w.slotType.name)
+        put("sponsorName", w.sponsorName)
+        put("ruleId", w.ruleId)
+        put("ruleName", w.ruleName)
+        put("breachReason", w.breachReason)
+        put("originalPayoutMillions", w.originalPayoutMillions)
+        put("reducedPayoutMillions", w.reducedPayoutMillions)
+        put("forfeitedBonusMillions", w.forfeitedBonusMillions)
+        put("title", w.title)
+        put("message", w.message)
+        put("seasonYear", w.seasonYear)
+        put("weekNumber", w.weekNumber)
+    }
+
+    private fun jsonToSponsorBreachWarning(obj: JSONObject): SponsorBreachWarning = SponsorBreachWarning(
+        id = obj.optString("id"),
+        slotType = runCatching { LeagueSponsorSlotType.valueOf(obj.optString("slotType")) }
+            .getOrDefault(LeagueSponsorSlotType.APPAREL),
+        sponsorName = obj.optString("sponsorName", ""),
+        ruleId = obj.optString("ruleId", ""),
+        ruleName = obj.optString("ruleName", ""),
+        breachReason = obj.optString("breachReason", ""),
+        originalPayoutMillions = obj.optLong("originalPayoutMillions", 20L),
+        reducedPayoutMillions = obj.optLong("reducedPayoutMillions", 10L),
+        forfeitedBonusMillions = obj.optLong("forfeitedBonusMillions", 0L),
+        title = obj.optString("title", "Sponsor Breach Warning"),
+        message = obj.optString("message", ""),
+        seasonYear = obj.optInt("seasonYear", 2026),
+        weekNumber = obj.optInt("weekNumber", 1)
+    )
 
     private fun sponsorUltimatumToJson(u: SponsorUltimatumEvent): JSONObject = JSONObject().apply {
         put("id", u.id)
@@ -3604,5 +4003,145 @@ class LeagueRepository(context: Context) {
         seasonYear = obj.optInt("seasonYear", 2026),
         weekNumber = obj.optInt("weekNumber", 1)
     )
+
+    private fun leagueScandalToJson(s: LeagueScandalIncident): JSONObject = JSONObject().apply {
+        put("id", s.id)
+        put("title", s.title)
+        put("summary", s.summary)
+        put("severity", s.severity.name)
+        put("affectedSlots", JSONArray(s.affectedSlots.map { it.name }))
+        put("affectedSponsorNames", JSONArray(s.affectedSponsorNames))
+        put("stabilityDropApplied", s.stabilityDropApplied)
+        put("weeksUntilPenalty", s.weeksUntilPenalty)
+        put("seasonYear", s.seasonYear)
+        put("weekNumber", s.weekNumber)
+        put("implicatedFranchiseName", s.implicatedFranchiseName ?: "")
+        put("isResolved", s.isResolved)
+        put("penaltyApplied", s.penaltyApplied)
+        put("resolutionSummary", s.resolutionSummary ?: "")
+    }
+
+    private fun jsonToLeagueScandal(obj: JSONObject): LeagueScandalIncident {
+        val slotsArr = obj.optJSONArray("affectedSlots") ?: JSONArray()
+        val slots = (0 until slotsArr.length()).mapNotNull { idx ->
+            runCatching { LeagueSponsorSlotType.valueOf(slotsArr.optString(idx)) }.getOrNull()
+        }
+        val namesArr = obj.optJSONArray("affectedSponsorNames") ?: JSONArray()
+        val names = (0 until namesArr.length()).mapNotNull { idx ->
+            namesArr.optString(idx).takeIf { it.isNotBlank() }
+        }
+        return LeagueScandalIncident(
+            id = obj.optString("id"),
+            title = obj.optString("title"),
+            summary = obj.optString("summary"),
+            severity = runCatching { LeagueScandalSeverity.valueOf(obj.optString("severity")) }
+                .getOrDefault(LeagueScandalSeverity.MODERATE),
+            affectedSlots = slots,
+            affectedSponsorNames = names,
+            stabilityDropApplied = obj.optInt("stabilityDropApplied", 0),
+            weeksUntilPenalty = obj.optInt("weeksUntilPenalty", 2),
+            seasonYear = obj.optInt("seasonYear", 2026),
+            weekNumber = obj.optInt("weekNumber", 1),
+            implicatedFranchiseName = obj.optString("implicatedFranchiseName").takeIf { it.isNotBlank() },
+            isResolved = obj.optBoolean("isResolved", false),
+            penaltyApplied = obj.optBoolean("penaltyApplied", false),
+            resolutionSummary = obj.optString("resolutionSummary").takeIf { it.isNotBlank() }
+        )
+    }
+
+    fun savePrDamageControlState(state: PrDamageControlState) {
+        val root = JSONObject().apply {
+            put("totalTurnsElapsed", state.totalTurnsElapsed)
+            put("ticketConcessionCapActiveThisSeason", state.ticketConcessionCapActiveThisSeason)
+            put("emergencyApologyUsedThisSeason", state.emergencyApologyUsedThisSeason)
+            put("sponsorRulesBlockedUntilYear", state.sponsorRulesBlockedUntilYear)
+            put("lastActionNote", state.lastActionNote)
+            val trackersObj = JSONObject()
+            state.actionTrackers.forEach { (type, tr) ->
+                trackersObj.put(
+                    type.name,
+                    JSONObject().apply {
+                        put("cooldownTurnsRemaining", tr.cooldownTurnsRemaining)
+                        put("diminishingReturnsTurnsRemaining", tr.diminishingReturnsTurnsRemaining)
+                        put("usesWithinWindow", tr.usesWithinWindow)
+                        put("lastUsedTurn", tr.lastUsedTurn ?: -1)
+                        put("totalUsesAllTime", tr.totalUsesAllTime)
+                    }
+                )
+            }
+            put("actionTrackers", trackersObj)
+            val histArr = JSONArray()
+            state.actionHistory.forEach { entry ->
+                histArr.put(
+                    JSONObject().apply {
+                        put("id", entry.id)
+                        put("actionType", entry.actionType.name)
+                        put("seasonYear", entry.seasonYear)
+                        put("weekNumber", entry.weekNumber)
+                        put("turnNumber", entry.turnNumber)
+                        put("sentimentGainApplied", entry.sentimentGainApplied)
+                        put("wasDiminished", entry.wasDiminished)
+                        put("summary", entry.summary)
+                    }
+                )
+            }
+            put("actionHistory", histArr)
+        }
+        settingsPrefs.edit().putString("pr_damage_control_json", root.toString()).apply()
+    }
+
+    fun loadPrDamageControlState(): PrDamageControlState? {
+        val raw = settingsPrefs.getString("pr_damage_control_json", null) ?: return null
+        return try {
+            val root = JSONObject(raw)
+            val trackersObj = root.optJSONObject("actionTrackers")
+            val trackers = PrDamageActionType.entries.associateWith { type ->
+                val tObj = trackersObj?.optJSONObject(type.name)
+                if (tObj != null) {
+                    val lastTurn = tObj.optInt("lastUsedTurn", -1)
+                    PrActionTracking(
+                        actionType = type,
+                        cooldownTurnsRemaining = tObj.optInt("cooldownTurnsRemaining", 0),
+                        diminishingReturnsTurnsRemaining = tObj.optInt("diminishingReturnsTurnsRemaining", 0),
+                        usesWithinWindow = tObj.optInt("usesWithinWindow", 0),
+                        lastUsedTurn = if (lastTurn >= 0) lastTurn else null,
+                        totalUsesAllTime = tObj.optInt("totalUsesAllTime", 0)
+                    )
+                } else {
+                    PrActionTracking(actionType = type)
+                }
+            }
+            val histArr = root.optJSONArray("actionHistory") ?: JSONArray()
+            val history = (0 until histArr.length()).mapNotNull { idx ->
+                val o = histArr.optJSONObject(idx) ?: return@mapNotNull null
+                val actType = runCatching { PrDamageActionType.valueOf(o.optString("actionType")) }.getOrNull()
+                    ?: return@mapNotNull null
+                PrActionLogEntry(
+                    id = o.optString("id"),
+                    actionType = actType,
+                    seasonYear = o.optInt("seasonYear", 2026),
+                    weekNumber = o.optInt("weekNumber", 1),
+                    turnNumber = o.optInt("turnNumber", 1),
+                    sentimentGainApplied = o.optInt("sentimentGainApplied", actType.baseFanSentimentGain),
+                    wasDiminished = o.optBoolean("wasDiminished", false),
+                    summary = o.optString("summary", "")
+                )
+            }
+            PrDamageControlState(
+                totalTurnsElapsed = root.optInt("totalTurnsElapsed", 1).coerceAtLeast(1),
+                actionTrackers = trackers,
+                ticketConcessionCapActiveThisSeason = root.optBoolean("ticketConcessionCapActiveThisSeason", false),
+                emergencyApologyUsedThisSeason = root.optBoolean("emergencyApologyUsedThisSeason", false),
+                sponsorRulesBlockedUntilYear = root.optInt("sponsorRulesBlockedUntilYear", 0),
+                actionHistory = history,
+                lastActionNote = root.optString(
+                    "lastActionNote",
+                    "PR Damage Control ready — intervene quickly when scandals threaten Fan Sentiment or sponsors."
+                )
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
 }
 

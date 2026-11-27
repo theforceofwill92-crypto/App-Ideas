@@ -24,10 +24,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ai.configureAppCheck
+import com.example.data.DatabaseModule
 import com.example.model.DashboardSnackbarEvent
 import com.example.ui.components.DashboardSnackbarEffect
 import com.example.ui.components.DashboardSnackbarHost
 import com.example.ui.components.DilemmaDialog
+import com.example.ui.components.FranchiseManagementModal
 import com.example.ui.components.LaborUnionNegotiationOverlay
 import com.example.ui.components.NamingRightsOfferModal
 import com.example.ui.components.NewLeagueDialog
@@ -42,7 +44,9 @@ import com.example.viewmodel.LeagueViewModel
 
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: LeagueViewModel by viewModels()
+    private val viewModel: LeagueViewModel by viewModels {
+        DatabaseModule.provideLeagueViewModelFactory(application)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,6 +67,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainAppContent(viewModel: LeagueViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val persistedFranchises by viewModel.persistedFranchises.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var activeSnackbarAlert by remember { mutableStateOf<DashboardSnackbarEvent?>(null) }
 
@@ -140,6 +145,24 @@ fun MainAppContent(viewModel: LeagueViewModel) {
                     onLetSponsorPullOut = { viewModel.resolveSponsorUltimatum(enforceMaxPenalty = false) }
                 )
             }
+        }
+
+        if (uiState.showFranchiseManagementModal) {
+            FranchiseManagementModal(
+                availableCities = uiState.cities,
+                enabledConferences = uiState.ruleBook.effectiveConferences(uiState.franchises),
+                persistedFranchiseCount = persistedFranchises.size.coerceAtLeast(uiState.franchises.size),
+                onDismiss = { viewModel.openFranchiseManagementModal(false) },
+                onAddFranchise = { name, city, initialVal, conf, colorHex ->
+                    viewModel.addManagedFranchise(
+                        franchiseName = name,
+                        cityName = city,
+                        initialValuationMillions = initialVal,
+                        conferenceOverride = conf,
+                        primaryColorHex = colorHex
+                    )
+                }
+            )
         }
     }
 }

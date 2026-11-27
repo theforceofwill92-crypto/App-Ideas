@@ -896,7 +896,8 @@ data class Franchise(
     val lowSpendingSeasons: Int = 0,
     val reputationScore: Int = 78,
     val lastReputationNote: String = "Balanced ownership investment and market stability.",
-    val teamMorale: Int = 78
+    val teamMorale: Int = 78,
+    val initialValuationMillions: Long? = null
 ) {
     val winPct: Double
         get() = if (wins + losses == 0) 0.500 else wins.toDouble() / (wins + losses)
@@ -1943,15 +1944,21 @@ data class FranchiseFinancialStatement(
     val loyaltySponsorMultiplier: Double = 1.0,
     val luxurySuiteRevenueMillions: Double = 0.0,
     val namingRightsRevenueMillions: Double = 0.0,
-    val franchiseValuationMillions: Long = 0L
+    val franchiseValuationMillions: Long = 0L,
+    val stadiumRevenueCapMultiplier: Double = 1.0
 )
 
-fun Franchise.calculateFinancialStatement(activeBroadcast: BroadcastContract, totalTeams: Int): FranchiseFinancialStatement {
+fun Franchise.calculateFinancialStatement(
+    activeBroadcast: BroadcastContract,
+    totalTeams: Int,
+    ticketConcessionCapActive: Boolean = false
+): FranchiseFinancialStatement {
+    val stadiumCapMult = if (ticketConcessionCapActive) 0.80 else 1.0
     val attendanceRate = FanLoyaltyEngine.computeAttendanceRate(this)
     val avgAttendance = (stadiumCapacity * attendanceRate).toInt()
     val homeGames = 8
     val baseTicketRevenue = (avgAttendance * ticketPrice * homeGames) / 1_000_000.0
-    val ticketRevenue = baseTicketRevenue + rivalryTicketBonusMillions
+    val ticketRevenue = (baseTicketRevenue + rivalryTicketBonusMillions) * stadiumCapMult
 
     val merchMultiplier = if (championships > 0) 1.25 else 1.0
     val loyaltyMerchMult = FanLoyaltyEngine.merchandiseLoyaltyMultiplier(fanLoyalty)
@@ -1963,14 +1970,14 @@ fun Franchise.calculateFinancialStatement(activeBroadcast: BroadcastContract, to
     val broadcastRevenue = nationalBroadcastCut + rsnCut
 
     val loyaltySponsorMult = FanLoyaltyEngine.sponsorLoyaltyMultiplier(fanLoyalty)
-    val suitePremium = facilities.annualSuitePremiumMillions
-    val namingRightsRev = stadium.namingRightsRevenue.coerceAtLeast(0L).toDouble()
+    val suitePremium = facilities.annualSuitePremiumMillions * stadiumCapMult
+    val namingRightsRev = stadium.namingRightsRevenue.coerceAtLeast(0L).toDouble() * stadiumCapMult
     val localSponsor = (localSponsorRevenueMillions.toDouble() + suitePremium) * loyaltySponsorMult + namingRightsRev
     val totalRevenue = ticketRevenue + merchandiseRevenue + broadcastRevenue + localSponsor
 
     // Baseline comparison against neutral 65 loyalty so UI & analytics quantify loyalty revenue impact
     val baseAttRate65 = FanLoyaltyEngine.computeAttendanceRate(this, loyaltyOverride = 65)
-    val baseTicket65 = ((stadiumCapacity * baseAttRate65).toInt() * ticketPrice * homeGames) / 1_000_000.0 + rivalryTicketBonusMillions
+    val baseTicket65 = (((stadiumCapacity * baseAttRate65).toInt() * ticketPrice * homeGames) / 1_000_000.0 + rivalryTicketBonusMillions) * stadiumCapMult
     val baseMerch65 = (fanBaseMillions * 8.5 * (fanMorale / 100.0) * (rosterRating / 75.0) * merchMultiplier * FanLoyaltyEngine.merchandiseLoyaltyMultiplier(65)).coerceAtLeast(4.0)
     val baseSponsor65 = (localSponsorRevenueMillions.toDouble() + suitePremium) * FanLoyaltyEngine.sponsorLoyaltyMultiplier(65) + namingRightsRev
     val baselineTotalRevenue = baseTicket65 + baseMerch65 + broadcastRevenue + baseSponsor65
@@ -2011,7 +2018,8 @@ fun Franchise.calculateFinancialStatement(activeBroadcast: BroadcastContract, to
         loyaltySponsorMultiplier = Math.round(loyaltySponsorMult * 100.0) / 100.0,
         luxurySuiteRevenueMillions = Math.round((suitePremium * loyaltySponsorMult) * 10.0) / 10.0,
         namingRightsRevenueMillions = Math.round(namingRightsRev * 10.0) / 10.0,
-        franchiseValuationMillions = valuationBreakdown.totalValuationMillions
+        franchiseValuationMillions = valuationBreakdown.totalValuationMillions,
+        stadiumRevenueCapMultiplier = stadiumCapMult
     )
 }
 
@@ -2642,7 +2650,8 @@ enum class OffSeasonStep(
     LEAGUE_DRAFT(6, "Rookie Draft", "Post-FA scouting & collegiate-driven draft before Pre-Season"),
     SUMMARY(7, "Parity & Review", "Reconstruction audit & Pre-Season launch"),
     SCHEDULE_CALENDAR(8, "Season Schedule", "Edit matchups, holiday rivalries, global showcases & Board approval"),
-    ANNUAL_REVIEW(9, "Annual Review", "Owners, Players, Fans & Media grade, Job Security & Legacy")
+    ANNUAL_REVIEW(9, "Annual Review", "Owners, Players, Fans & Media grade, Job Security & Legacy"),
+    RULES_COMMITTEE(10, "Rules Committee", "Sponsor & league rule amendments vote")
 }
 
 data class RetiredPlayer(

@@ -338,8 +338,8 @@ object FanSentimentEngine {
         weekNumber: Int = 1,
         seedOffset: Int = 0
     ): FanSentimentState {
-        val nextCasual = (currentState.casualSentimentScore + casualDelta).coerceIn(10, 100)
-        val nextDieHard = (currentState.dieHardSentimentScore + dieHardDelta).coerceIn(10, 100)
+        val nextCasual = (currentState.casualSentimentScore + casualDelta).coerceIn(0, 100)
+        val nextDieHard = (currentState.dieHardSentimentScore + dieHardDelta).coerceIn(0, 100)
         val actualCasualDelta = nextCasual - currentState.casualSentimentScore
         val actualDieHardDelta = nextDieHard - currentState.dieHardSentimentScore
 

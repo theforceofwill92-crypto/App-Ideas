@@ -128,11 +128,67 @@ fun LeagueSponsorsScreen(
                     LeagueSponsorsSummaryCard(
                         activeCount = sponsorsState.activeCount,
                         totalAnnualPayout = sponsorsState.totalAnnualPayoutMillions,
+                        totalBonusPayout = sponsorsState.totalBonusPayoutMillions,
                         projectedNextCap = capProjection.nextSalaryCapMillions,
                         annualRevenueWithSponsors = capProjection.annualLeagueRevenueMillions,
                         highRiskCount = sponsorsState.highSensitivityContracts().size,
+                        pendingRuleVoteCount = sponsorsState.pendingOffseasonRuleVotes.size,
                         lastSummary = sponsorsState.lastSummary
                     )
+                }
+
+                sponsorsState.activeBreachWarning?.let { warning ->
+                    item(key = "sponsor_breach_warning_card") {
+                        SponsorBreachWarningCard(
+                            warning = warning,
+                            onDismiss = { viewModel.dismissSponsorBreachWarning() }
+                        )
+                    }
+                }
+
+                if (sponsorsState.pendingOffseasonRuleVotes.isNotEmpty()) {
+                    item(key = "pending_sponsor_rule_votes_banner") {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("banner_pending_offseason_rule_votes")
+                                .border(1.2.dp, CyanAccent.copy(alpha = 0.55f), RoundedCornerShape(14.dp)),
+                            colors = CardDefaults.cardColors(containerColor = CyanAccent.copy(alpha = 0.1f)),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "QUEUED FOR OFFSEASON RULES COMMITTEE VOTE (${sponsorsState.pendingOffseasonRuleVotes.size})",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Black,
+                                        color = CyanAccent,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(
+                                        onClick = { viewModel.openRuleCommitteeScreen(true) },
+                                        modifier = Modifier.testTag("btn_open_committee_from_sponsors")
+                                    ) {
+                                        Text("Open Vote", fontWeight = FontWeight.Black, color = GoldPrimary)
+                                    }
+                                }
+                                sponsorsState.pendingOffseasonRuleVotes.forEach { vote ->
+                                    Text(
+                                        text = "• ${vote.sponsorName}: '${vote.ruleName}' (+\$${vote.bonusPayout}M/yr bonus • -${vote.fanPenalty} Fan, -${vote.unionPenalty} Union)",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 if (sponsorsState.expiredSlotNotices.isNotEmpty()) {
@@ -249,9 +305,11 @@ fun LeagueSponsorsScreen(
 private fun LeagueSponsorsSummaryCard(
     activeCount: Int,
     totalAnnualPayout: Long,
+    totalBonusPayout: Long,
     projectedNextCap: Long,
     annualRevenueWithSponsors: Long,
     highRiskCount: Int,
+    pendingRuleVoteCount: Int,
     lastSummary: String
 ) {
     Card(
@@ -298,14 +356,18 @@ private fun LeagueSponsorsSummaryCard(
                     )
                 }
                 Surface(
-                    color = if (highRiskCount > 0) AmberWarning.copy(alpha = 0.2f) else EmeraldAccent.copy(alpha = 0.18f),
+                    color = if (highRiskCount > 0 || pendingRuleVoteCount > 0) AmberWarning.copy(alpha = 0.2f) else EmeraldAccent.copy(alpha = 0.18f),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        text = if (highRiskCount > 0) "$highRiskCount High-Risk Clause" else "Low PR Exposure",
+                        text = when {
+                            pendingRuleVoteCount > 0 -> "$pendingRuleVoteCount Rule Vote(s) Queued"
+                            highRiskCount > 0 -> "$highRiskCount High-Risk Clause"
+                            else -> "Low PR Exposure"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Black,
-                        color = if (highRiskCount > 0) AmberWarning else EmeraldAccent,
+                        color = if (highRiskCount > 0 || pendingRuleVoteCount > 0) AmberWarning else EmeraldAccent,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
@@ -333,6 +395,14 @@ private fun LeagueSponsorsSummaryCard(
                             fontWeight = FontWeight.Black,
                             color = EmeraldAccent
                         )
+                        if (totalBonusPayout > 0L) {
+                            Text(
+                                text = "incl. +\$${totalBonusPayout}M bonus",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 9.sp,
+                                color = GoldPrimary
+                            )
+                        }
                     }
                 }
                 Surface(
@@ -562,10 +632,14 @@ private fun LeagueSponsorSlotCard(
                                     fontSize = 10.sp
                                 )
                                 Text(
-                                    text = "+\$${contract.payout}M/yr",
+                                    text = if (contract.bonusPayoutActiveMillions > 0L) {
+                                        "+\$${contract.payout}M + \$${contract.bonusPayoutActiveMillions}M/yr"
+                                    } else {
+                                        "+\$${contract.payout}M/yr"
+                                    },
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Black,
-                                    color = EmeraldAccent
+                                    color = if (contract.ruleDemand?.isBreached == true) CrimsonAlert else EmeraldAccent
                                 )
                             }
                             Column {
@@ -595,6 +669,46 @@ private fun LeagueSponsorSlotCard(
                                     fontWeight = FontWeight.Bold,
                                     color = Color(contract.perkType.accentHex)
                                 )
+                            }
+                        }
+
+                        contract.ruleDemand?.let { demand ->
+                            val demandAccent = when {
+                                demand.isBreached -> CrimsonAlert
+                                demand.isPassed -> EmeraldAccent
+                                else -> GoldPrimary
+                            }
+                            Surface(
+                                color = demandAccent.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, demandAccent.copy(alpha = 0.4f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("slot_rule_demand_${slotType.key}")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        text = "RULE DEMAND • ${demand.status.label.uppercase()}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Black,
+                                        color = demandAccent,
+                                        fontSize = 10.sp
+                                    )
+                                    Text(
+                                        text = demand.ruleName,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Bonus: +\$${demand.bonusPayout}M/yr • Fan -${demand.fanPenalty} • Union -${demand.unionPenalty}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
 
@@ -804,6 +918,41 @@ fun LeagueSponsorOffersModal(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (offer.scandalSensitivity.isHigh) sensColor else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+
+                                offer.ruleDemand?.let { demand ->
+                                    Surface(
+                                        color = GoldPrimary.copy(alpha = 0.12f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = BorderStroke(1.dp, GoldPrimary.copy(alpha = 0.45f)),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("offer_rule_demand_${index}")
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                                        ) {
+                                            Text(
+                                                text = "RULE DEMAND • OFFSEASON COMMITTEE VOTE",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Black,
+                                                color = GoldPrimary,
+                                                fontSize = 10.sp
+                                            )
+                                            Text(
+                                                text = demand.ruleName,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "If Passed: +\$${demand.bonusPayout}M/yr bonus • -${demand.fanPenalty} Fan • -${demand.unionPenalty} Union",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -977,6 +1126,141 @@ fun SponsorUltimatumModal(
                         style = MaterialTheme.typography.labelMedium
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun SponsorBreachWarningCard(
+    warning: com.example.model.SponsorBreachWarning,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(2.dp, CrimsonAlert, RoundedCornerShape(16.dp))
+            .testTag("card_sponsor_breach_warning"),
+        colors = CardDefaults.cardColors(containerColor = CrimsonAlert.copy(alpha = 0.14f)),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(CrimsonAlert.copy(alpha = 0.22f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ReportProblem,
+                            contentDescription = "Sponsor Breach Warning",
+                            tint = CrimsonAlert,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "SPONSOR BREACH WARNING • ${warning.slotType.displayName.uppercase()}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black,
+                            color = CrimsonAlert,
+                            letterSpacing = 0.8.sp
+                        )
+                        Text(
+                            text = "${warning.sponsorName} Furious — Payout Cut 50%",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+
+            Text(
+                text = warning.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            text = "PAYOUT SLASHED",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = CrimsonAlert,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            text = "\$${warning.originalPayoutMillions}M ➔ \$${warning.reducedPayoutMillions}M/yr",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Black,
+                            color = CrimsonAlert
+                        )
+                    }
+                }
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            text = "BONUS FORFEITED",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            text = "-\$${warning.forfeitedBonusMillions}M/yr",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Black,
+                            color = AmberWarning
+                        )
+                    }
+                }
+            }
+
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = CrimsonAlert),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .minimumInteractiveComponentSize()
+                    .testTag("btn_dismiss_sponsor_breach_warning")
+            ) {
+                Text(
+                    text = "Acknowledge Breach Notice",
+                    color = Color.White,
+                    fontWeight = FontWeight.Black
+                )
             }
         }
     }

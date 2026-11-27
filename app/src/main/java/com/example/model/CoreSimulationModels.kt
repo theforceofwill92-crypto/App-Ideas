@@ -184,7 +184,8 @@ enum class DashboardSnackbarRoute {
     RIVAL_WATCH,
     STADIUM_ULTIMATUM,
     FAN_SENTIMENT_PULSE,
-    BROADCAST_WAR_ROOM
+    BROADCAST_WAR_ROOM,
+    LEAGUE_SPONSORS
 }
 
 data class DashboardSnackbarEvent(

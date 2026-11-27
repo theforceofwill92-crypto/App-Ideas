@@ -366,6 +366,17 @@ fun HomeScreen(
             }
         }
 
+        uiState.leagueSponsors.activeBreachWarning?.let { warning ->
+            item(key = "active_sponsor_breach_warning") {
+                SponsorBreachWarningCard(
+                    warning = warning,
+                    onDismiss = { viewModel.dismissSponsorBreachWarning() },
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+        }
+
         if (uiState.unionAgreement.isLockoutActive) {
             item(key = "home_lockout_banner") {
                 Card(
@@ -749,17 +760,39 @@ fun HomeScreen(
                 DeskHubActionSpec(
                     key = "league_sponsors",
                     icon = Icons.Default.WorkspacePremium,
-                    accent = if (uiState.leagueSponsors.activeUltimatum != null) CrimsonAlert else GoldPrimary,
-                    title = "League Sponsors (${uiState.leagueSponsors.activeCount}/4 Active)",
-                    subtitle = if (uiState.leagueSponsors.activeCount > 0) {
-                        "+\$${uiState.leagueSponsors.totalAnnualPayoutMillions}M/yr Cap Revenue • ${uiState.leagueSponsors.highSensitivityContracts().size} High-Risk"
-                    } else {
-                        "4 Open Slots (Apparel, Beverage, Tech, Betting) • Tap for Offers"
+                    accent = when {
+                        uiState.leagueSponsors.activeBreachWarning != null || uiState.leagueSponsors.activeUltimatum != null -> CrimsonAlert
+                        uiState.leagueSponsors.pendingOffseasonRuleVotes.isNotEmpty() -> CyanAccent
+                        else -> GoldPrimary
                     },
-                    buttonLabel = if (uiState.leagueSponsors.activeUltimatum != null) "Alert" else "Slots",
+                    title = "League Sponsors (${uiState.leagueSponsors.activeCount}/4 Active)",
+                    subtitle = when {
+                        uiState.leagueSponsors.activeBreachWarning != null ->
+                            "BREACH WARNING: ${uiState.leagueSponsors.activeBreachWarning!!.sponsorName} cut payout 50%"
+                        uiState.leagueSponsors.activeCount > 0 ->
+                            "+\$${uiState.leagueSponsors.totalAnnualPayoutMillions}M/yr Cap Revenue • ${uiState.leagueSponsors.pendingOffseasonRuleVotes.size} Rule Vote(s) Queued"
+                        else ->
+                            "4 Open Slots (Apparel, Beverage, Tech, Betting) • Tap for Offers"
+                    },
+                    buttonLabel = when {
+                        uiState.leagueSponsors.activeBreachWarning != null -> "Breach"
+                        uiState.leagueSponsors.activeUltimatum != null -> "Alert"
+                        else -> "Slots"
+                    },
                     buttonTestTag = "btn_open_league_sponsors",
                     rowTestTag = "banner_league_sponsors",
                     onClick = { viewModel.openLeagueSponsorsScreen(true) }
+                ),
+                DeskHubActionSpec(
+                    key = "franchise_management",
+                    icon = Icons.Default.DomainAdd,
+                    accent = GoldPrimary,
+                    title = "Franchise Management (${uiState.franchises.size} Clubs)",
+                    subtitle = "Register a new franchise (name, city & initial valuation) to Room",
+                    buttonLabel = "Add",
+                    buttonTestTag = "btn_home_franchise_management",
+                    rowTestTag = "banner_franchise_management",
+                    onClick = { viewModel.openFranchiseManagementModal(true) }
                 ),
                 DeskHubActionSpec(
                     key = "expansion",

@@ -24,26 +24,28 @@ object LeagueSimulationEngine {
         fanGrowthBonusPct: Double,
         facilityValuationGainMillions: Long,
         specialEventBonusMillions: Double = 0.0,
-        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState(),
+        ticketConcessionCapActive: Boolean = false
     ): WeeklyRevenueBreakdown {
+        val stadiumCapMult = if (ticketConcessionCapActive) 0.80 else 1.0
         val exclusivityMultiplier = if (activeBroadcast.hasExclusivity) {
             1.0
         } else {
             ((100 - activeBroadcast.exclusivityLostPenaltyPct.coerceIn(0, 50)) / 100.0)
         }
         val weeklyBroadcastPayout = ((activeBroadcast.annualPayoutMillions / 16.0) * exclusivityMultiplier) + specialEventBonusMillions
-        val weeklyNamingRightsRevenue = franchises.sumOf {
+        val weeklyNamingRightsRevenue = (franchises.sumOf {
             it.stadium.namingRightsRevenue.coerceAtLeast(0L).toDouble()
-        } / 16.0
+        } / 16.0) * stadiumCapMult
         val weeklyLeagueSponsorsRevenue = leagueSponsors.totalAnnualPayoutMillions.coerceAtLeast(0L).toDouble() / 16.0
         val weeklySponsorRevenue = (franchises.sumOf {
-            (it.localSponsorRevenueMillions + it.facilities.annualSuitePremiumMillions) *
+            (it.localSponsorRevenueMillions + (it.facilities.annualSuitePremiumMillions * stadiumCapMult)) *
                 FanLoyaltyEngine.sponsorLoyaltyMultiplier(it.fanLoyalty)
         } / 16.0) + weeklyNamingRightsRevenue + weeklyLeagueSponsorsRevenue
 
         val avgLoyalty = if (franchises.isNotEmpty()) franchises.map { it.fanLoyalty }.average() else 75.0
-        val rawLoyaltyGateShare = (((avgLoyalty - 65.0) / 100.0) * franchises.size * 0.9).coerceAtLeast(0.0)
-        val rawRivalryGateCut = rivalryTicketBonusMillions * 0.25
+        val rawLoyaltyGateShare = (((avgLoyalty - 65.0) / 100.0) * franchises.size * 0.9).coerceAtLeast(0.0) * stadiumCapMult
+        val rawRivalryGateCut = rivalryTicketBonusMillions * 0.25 * stadiumCapMult
 
         // High labor strike risk dampens attendance & gate confidence
         val strikePenaltyFactor = when {
@@ -129,13 +131,15 @@ object LeagueSimulationEngine {
         franchises: List<Franchise>,
         activeBroadcast: BroadcastContract,
         unionAgreement: LaborUnionAgreement,
-        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState()
+        leagueSponsors: LeagueSponsorsState = LeagueSponsorsState(),
+        ticketConcessionCapActive: Boolean = false
     ): AnnualRevenueAndCapProjection {
         val teamCount = franchises.size.coerceAtLeast(1)
-        val totalNamingRights = franchises.sumOf { it.stadium.namingRightsRevenue.coerceAtLeast(0L) }
+        val stadiumCapMult = if (ticketConcessionCapActive) 0.80 else 1.0
+        val totalNamingRights = (franchises.sumOf { it.stadium.namingRightsRevenue.coerceAtLeast(0L) } * stadiumCapMult).roundToLong()
         val totalLeagueSponsors = leagueSponsors.totalAnnualPayoutMillions.coerceAtLeast(0L)
         val totalFranchiseAnnualRevenue = franchises.sumOf {
-            it.calculateFinancialStatement(activeBroadcast, teamCount).totalRevenueMillions
+            it.calculateFinancialStatement(activeBroadcast, teamCount, ticketConcessionCapActive = ticketConcessionCapActive).totalRevenueMillions
         }.roundToLong()
         val annualLeagueRevenue = totalFranchiseAnnualRevenue +
             (activeBroadcast.annualPayoutMillions * 0.15).roundToLong() +
